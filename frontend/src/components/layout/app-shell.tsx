@@ -8,6 +8,7 @@ import { StarButton } from '@/features/promo/star-button'
 import { SponsorDialog } from '@/features/promo/sponsor-dialog'
 import { CommunityDialog } from '@/features/promo/community-dialog'
 import { ResumableTasksButton } from '@/features/tasks/resumable-tasks-button'
+import { MessageCenter } from '@/features/notifications/message-center'
 import { isTauriRuntime } from '@/lib/tauri'
 
 async function withCurrentWindow(action: 'minimize' | 'toggleMaximize' | 'close') {
@@ -84,6 +85,7 @@ export function AppShell({ children, modeSlot, headerExtras }: AppShellProps) {
         )}
         <div className="flex items-center gap-1">
           {headerExtras}
+          <MessageCenter />
           <ResumableTasksButton />
           <ThemeSwitcher />
           <Button aria-label={t('app.window.minimize')} size="icon" variant="ghost" onClick={() => void withCurrentWindow('minimize')}>

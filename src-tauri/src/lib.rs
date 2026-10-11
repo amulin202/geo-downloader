@@ -33,6 +33,7 @@ pub mod geotiff_sidecar;
 
 // Tauri commands
 mod commands;
+mod notifications;
 
 use std::sync::Arc;
 use task::TaskManager;
@@ -84,6 +85,7 @@ pub fn run() {
         .manage(Arc::new(cache_migration::CacheMigrationManager::new()))
         .manage(wayback_metadata::new_progress_map())
         .manage(assistant::AssistantRuntime::default())
+        .manage(notifications::ServiceState::new(dirs::config_dir().unwrap_or_else(std::env::temp_dir).join("geo-downloader").join("notification-services.json")))
         .plugin(
             tauri_plugin_log::Builder::default()
                 .level(log::LevelFilter::Info)
@@ -99,6 +101,12 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            notifications::auth_status,
+            notifications::auth_begin,
+            notifications::auth_logout,
+            notifications::notifications_list,
+            notifications::notifications_read,
+            notifications::notifications_open_link,
             commands::get_tile_sources,
             commands::get_builtin_sources,
             commands::analyze_tile_source_url,

@@ -1503,6 +1503,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "funty"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1767,7 +1777,7 @@ dependencies = [
 
 [[package]]
 name = "geo-downloader"
-version = "3.6.10"
+version = "3.6.11"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1775,6 +1785,7 @@ dependencies = [
  "dashmap",
  "dirs 5.0.1",
  "flate2",
+ "fs2",
  "futures",
  "futures-util",
  "gdal",
@@ -1789,6 +1800,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -4208,6 +4220,7 @@ dependencies = [
  "cookie",
  "cookie_store 0.22.0",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2",

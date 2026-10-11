@@ -6,29 +6,19 @@ export const OSM_DOWNLOAD_POLICY_EVENT = 'geod:osm-download-policy'
 
 export type OsmDownloadPolicyDecision = 'continue' | 'switch' | 'cancel'
 
-export class OsmDownloadPolicySession {
-  private acknowledged = false
-
-  requiresConfirmation(sourceId: string, sourceUrl?: string | null): boolean {
-    if (this.acknowledged || sourceId !== OSM_STANDARD_SOURCE_ID) return false
-    if (!sourceUrl) return true
-
-    try {
-      return new URL(sourceUrl.replace('{s}.', '')).hostname === 'tile.openstreetmap.org'
-    } catch {
-      return false
-    }
-  }
-
-  acknowledge(): void {
-    this.acknowledged = true
+export function isOsmOfflineBlocked(sourceId: string, sourceUrl?: string | null): boolean {
+  if (!sourceUrl) return sourceId === OSM_STANDARD_SOURCE_ID
+  try {
+    const host = new URL(sourceUrl.replaceAll('{s}', 'a')).hostname
+      .toLowerCase().replace(/\.+$/, '')
+    return host === 'tile.openstreetmap.org' || host.endsWith('.tile.openstreetmap.org')
+  } catch {
+    return sourceId === OSM_STANDARD_SOURCE_ID
   }
 }
 
-export const osmDownloadPolicySession = new OsmDownloadPolicySession()
-
 type OsmDownloadPolicyRequest = {
-  resolve: (decision: OsmDownloadPolicyDecision) => void
+  resolve: (decision: Exclude<OsmDownloadPolicyDecision, 'continue'>) => void
 }
 
 let pendingDecision: Promise<OsmDownloadPolicyDecision> | null = null
@@ -37,7 +27,7 @@ export function requestOsmDownloadApproval(
   sourceId: string,
   sourceUrl?: string | null,
 ): Promise<OsmDownloadPolicyDecision> {
-  if (!osmDownloadPolicySession.requiresConfirmation(sourceId, sourceUrl)) {
+  if (!isOsmOfflineBlocked(sourceId, sourceUrl)) {
     return Promise.resolve('continue')
   }
   if (pendingDecision) return pendingDecision
@@ -45,9 +35,9 @@ export function requestOsmDownloadApproval(
   let finishRequest: (decision: OsmDownloadPolicyDecision) => void = () => undefined
   const decisionPromise = new Promise<OsmDownloadPolicyDecision>((resolve) => {
     const finish = (decision: OsmDownloadPolicyDecision) => {
-      if (decision === 'continue') osmDownloadPolicySession.acknowledge()
       pendingDecision = null
-      resolve(decision)
+      // A stale dialog/event listener cannot re-enable the former bypass.
+      resolve(decision === 'switch' ? 'switch' : 'cancel')
     }
     finishRequest = finish
   })

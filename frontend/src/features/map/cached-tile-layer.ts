@@ -12,6 +12,7 @@
 import L from 'leaflet'
 import { resolveTileUrl } from './tile-url'
 import { invokeCommand, isTauriRuntime } from '@/lib/tauri'
+import { isOsmOfflineBlocked } from '@/features/sources/osm-download-policy'
 
 export interface CachedTileLayerOptions extends L.TileLayerOptions {
   /** 缓存的 source key（建议用稳定的英文标识，如 'world_imagery' 或 'wayback_2024-03-14'）*/
@@ -177,6 +178,11 @@ export function createCachedTileLayer(
   urlTemplate: string,
   options: CachedTileLayerOptions,
 ): L.TileLayer {
+  // Apply to custom sources and overlays as well as the built-in base layer.
+  // The WebView HTTP cache handles interactive OSM browsing.
+  if (isOsmOfflineBlocked(options.sourceKey, urlTemplate)) {
+    return L.tileLayer(urlTemplate, options)
+  }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return new (CachedTileLayerImpl as any)(urlTemplate, options) as L.TileLayer
 }

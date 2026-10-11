@@ -1,8 +1,10 @@
 import type { AppMode, SidebarTab } from '@/store/app-store'
 import { isTauriRuntime } from '@/lib/tauri'
 import { useTelemetryStore } from './telemetry-store'
+import type { DownloadLifecycleEvent } from './download-lifecycle'
 
 interface TelemetryEventMap {
+  download_task_state: DownloadLifecycleEvent
   app_started: Record<string, never>
   mode_changed: { mode: AppMode }
   sidebar_tab_changed: { tab: SidebarTab }
@@ -232,6 +234,10 @@ function sanitizeProperties<TName extends TelemetryEventName>(
     case 'download_task_created': {
       const value = properties as TelemetryEventMap['download_task_created']
       return { ...value }
+    }
+    case 'download_task_state': {
+      const value = properties as DownloadLifecycleEvent
+      return { attempt_id: value.attempt_id, state: value.state, duration: value.duration, reason: value.reason }
     }
     case 'bookmark_action':
     case 'task_action':
