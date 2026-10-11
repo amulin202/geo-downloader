@@ -20,7 +20,7 @@ const linkCategories: {
       { id: "Overview", label: "产品介绍", href: "/" },
       { id: "Features", label: "核心能力", href: "/#features" },
       { id: "Screenshots", label: "产品界面", href: "/#screenshots" },
-      { id: "Agent", label: "GeoD Agent · 测试版", href: "/agent" },
+      { id: "Agent", label: "GeoD Agent", href: "/agent" },
       { id: "Browser", label: "浏览器影像", href: "/browser" },
       { id: "Cli", label: "GeoD CLI", href: "/cli" },
       { id: "Mcp", label: "GeoD MCP", href: "/mcp" },

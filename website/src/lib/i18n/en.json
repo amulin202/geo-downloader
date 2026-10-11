@@ -1015,5 +1015,17 @@
   "0.2.4 · 公开测试版": "0.2.4 · PUBLIC BETA",
   "这一版精简模型输入，保留已确认参数与任务状态；改进对话、登录和托盘，缺少技能时引导安装。": "This release reduces model context while retaining confirmed choices and task state, improves chat, login and tray behavior, and guides optional skill installation.",
   "0.2.4 已发布为公开测试版。全新 Windows、全部图源、规模或外部服务尚未全部验收。": "Version 0.2.4 is available as a public beta. Clean Windows, every source, workload and external service have not all been validated.",
-  "在同一个对话工作区中规划、下载和查看不同类型的数据。当前公开测试版为 0.2.4，具体能力与验证范围请查看版本说明。": "Plan, download and inspect different data types in one conversation workspace. The current public beta is 0.2.4; see its release notes for capabilities and the verified scope."
+  "在同一个对话工作区中规划、下载和查看不同类型的数据。当前公开测试版为 0.2.4，具体能力与验证范围请查看版本说明。": "Plan, download and inspect different data types in one conversation workspace. The current public beta is 0.2.4; see its release notes for capabilities and the verified scope.",
+  "Windows 0.2.4 正式版已发布 · 支持签名在线更新": "Windows release 0.2.4 available · Signed online updates",
+  "对话、地图与成果，在一个工作区中。Windows 正式版 0.2.4 现已发布。": "Conversation, maps and outputs in one workspace. Windows release 0.2.4 is available now.",
+  "Windows 桌面应用 · 正式版": "Windows desktop app · Official release",
+  "官网下载 Windows 正式版": "Website download · Windows release",
+  "当前可下载 0.2.4 正式版 · Windows x64": "Available now: release 0.2.4 · Windows x64",
+  "0.2.4 · 正式版": "0.2.4 · OFFICIAL RELEASE",
+  "Windows x64 · 0.2.4 正式版": "Windows x64 · Release 0.2.4",
+  "下载正式版，用 AI 对话完成地理数据任务。关注公众号或加入技术交流群，获取版本更新与使用教程。": "Download the release and complete geographic data tasks with AI conversation. Follow our WeChat account or join the community for updates and guides.",
+  "0.2.4 已正式发布。功能与验证范围见版本说明；全新 Windows 和部分外部服务尚未覆盖。": "Version 0.2.4 is officially released. See its release notes for features and verified scope; clean Windows and some external services remain untested.",
+  "在同一个对话工作区中规划、下载和查看不同类型的数据。当前正式版为 0.2.4，具体能力与验证范围请查看版本说明。": "Plan, download and inspect different data types in one conversation workspace. The current release is 0.2.4; see its release notes for capabilities and the verified scope.",
+  "0.2.4 · Windows 正式版": "0.2.4 · Windows release",
+  "GeoD Agent": "GeoD Agent"
 }
