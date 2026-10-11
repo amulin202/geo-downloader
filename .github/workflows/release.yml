@@ -85,7 +85,7 @@ jobs:
       - name: Build
         env:
           VITE_TELEMETRY_ENDPOINT: https://laogao.xyz/geod-telemetry/v1/events
-        run: cargo tauri build --target ${{ matrix.target }}
+        run: cargo tauri build --target ${{ matrix.target }} -- --locked
 
       - name: Verify macOS app signature
         if: matrix.platform == 'macos-latest'
@@ -189,27 +189,12 @@ jobs:
         with:
           name: 'GeoDownloader v${{ steps.version.outputs.VERSION }}'
           body_path: 'docs/release-notes/release-notes-v${{ steps.version.outputs.VERSION }}.md'
+          # Publish after the public API and checksum-verified mirror are ready.
+          draft: true
           prerelease: ${{ steps.version.outputs.PRERELEASE == 'true' }}
           files: artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Dispatch production deployment
-        if: ${{ steps.version.outputs.PRERELEASE != 'true' }}
-        env:
-          GH_TOKEN: ${{ secrets.DASHBOARD_DEPLOY_TOKEN }}
-        run: |
-          gh api \
-            --method POST \
-            repos/gaopengbin/gaopengbin-dashboard/dispatches \
-            --input - <<'JSON'
-          {
-            "event_type": "deploy",
-            "client_payload": {
-              "project": "geo-downloader",
-              "target": "mirror",
-              "version": "${{ steps.version.outputs.VERSION }}",
-              "ref": "${{ github.sha }}"
-            }
-          }
-          JSON
+      # Mirror deployment uses locally downloaded artifacts and pinned-key SSH.
+      # Production hosts must not download GitHub resources.
