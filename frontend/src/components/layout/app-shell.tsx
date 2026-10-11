@@ -61,12 +61,7 @@ export function AppShell({ children, modeSlot, headerExtras }: AppShellProps) {
       >
         <div data-tauri-drag-region className="flex select-none items-center gap-3">
           <div data-tauri-drag-region className="flex items-center gap-2">
-            <div className="flex size-7 items-center justify-center rounded-md bg-gradient-to-br from-primary to-primary/70 text-primary-foreground shadow-sm">
-              <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 3 3 9l9 6 9-6-9-6Z" />
-                <path d="m3 15 9 6 9-6" />
-              </svg>
-            </div>
+            <img src="/geod-symbol-blue.png" alt="" aria-hidden="true" draggable={false} className="size-8 shrink-0 object-contain" />
             <span data-tauri-drag-region className="text-sm font-semibold tracking-tight">
               <span className="text-primary">GeoD</span>
               <span className="text-foreground/85">ownloader</span>
