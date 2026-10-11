@@ -101,11 +101,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
-            notifications::auth_status,
-            notifications::auth_begin,
-            notifications::auth_logout,
             notifications::notifications_list,
-            notifications::notifications_read,
             notifications::notifications_open_link,
             commands::get_tile_sources,
             commands::get_builtin_sources,

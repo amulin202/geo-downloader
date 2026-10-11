@@ -80,9 +80,6 @@ dirs = "5"
 # Embedded SQLite (MBTiles)
 rusqlite = { version = "0.32", features = ["bundled"] }
 
-sha2 = "0.10"
-fs2 = "0.4"
-
 # Base64 (used for tile_cache JS bridge)
 base64 = "0.22"
 

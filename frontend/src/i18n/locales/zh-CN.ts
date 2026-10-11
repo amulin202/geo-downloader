@@ -1,24 +1,19 @@
 const zhCN = {
   notifications: {
+    "guest": "公共公告 · 已读状态保存在本机",
   "title": "消息中心",
-  "description": "产品更新、服务公告与账号通知。",
+  "description": "产品更新与服务公告，无需登录。",
   "all": "全部消息",
   "unread": "未读",
   "readAll": "全部已读",
   "refresh": "刷新消息",
   "view": "查看消息",
-  "accountMismatch": "消息响应与当前账号不一致。",
+  "accountMismatch": "公共公告响应无效。",
   "cached": "正在显示上次保存的消息。",
-  "connect": "连接 GeoD 账号",
-  "connectDescription": "在系统浏览器授权后，可查看公告和账号通知，并同步已读状态。",
-  "login": "登录 GeoD",
-  "waiting": "等待浏览器授权…",
   "loading": "正在加载消息…",
   "noUnread": "没有未读消息",
   "empty": "暂无消息",
   "important": "重要",
-  "connected": "已连接 GeoD 账号 · 已读状态同步",
-  "logout": "退出账号",
   "unreadCount": "消息中心，{{count}} 条未读"
 },
   app: {

@@ -33,19 +33,15 @@ try {
     await page.route('**/__qa_messages', route => route.fulfill({ contentType: 'text/html', body: html }));
     await page.addInitScript(({ lang, theme }) => {
       localStorage.clear(); localStorage.setItem('geod-language', lang); localStorage.setItem('gd:theme-mode', theme);
-      const items = Array.from({ length: 14 }, (_, i) => ({ id: `notice-${i}`, revision: 1, title: { zh: `GeoD 更新通知 ${i + 1}`, en: `GeoD update ${i + 1}` }, body: { zh: '下载保护与消息中心已更新。\n可以在这里查看产品更新、服务公告和账号通知。', en: 'Download protections and the message center have been updated.\nProduct updates, service notices and account messages are available here.' }, priority: i === 0 ? 'important' : 'normal', publishedAt: '2026-10-11T05:00:00Z', expiresAt: null, readAt: null, action: i === 0 ? { kind: 'link', label: { zh: '查看更新说明', en: 'Release notes' }, url: 'https://geod.laogao.xyz/' } : null }));
-      const qa = window.__qa = { auth: { state: 'connected', userId: 'qa-a', error: null }, items, calls: [], fail: false, reads: 0 };
+      const items = Array.from({ length: 14 }, (_, i) => ({ id: `notice-${i}`, revision: 1, title: { zh: `GeoD 更新通知 ${i + 1}`, en: `GeoD update ${i + 1}` }, body: { zh: '下载保护与消息中心已更新。\n无需登录即可查看产品更新与服务公告。', en: 'Download protections and the message center have been updated.\nRead public product updates and service notices without signing in.' }, priority: i === 0 ? 'important' : 'normal', publishedAt: '2026-10-11T05:00:00Z', expiresAt: null, readAt: null, action: i === 0 ? { kind: 'link', label: { zh: '查看更新说明', en: 'Release notes' }, url: 'https://geod.laogao.xyz/' } : null }));
+      const qa = window.__qa = { items, calls: [], fail: false };
       window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
         qa.calls.push({ command, args });
-        if (command === 'auth_status') return { ...qa.auth };
-        if (command === 'auth_logout') { qa.auth = { state: 'disconnected', userId: null, error: null }; return { ...qa.auth }; }
-        if (command === 'auth_begin') { qa.auth = { state: 'waiting', userId: null, error: null }; return { ...qa.auth }; }
         if (command === 'notifications_list') {
           if (qa.fail) throw new Error('QA offline');
-          const items = qa.auth.userId === 'qa-a' ? qa.items : [];
-          return { schemaVersion: 1, product: 'geod', accountId: qa.auth.userId, checkedAt: new Date().toISOString(), unreadCount: items.filter(x => !x.readAt).length, items: structuredClone(items) };
+          const items = structuredClone(qa.items).map(x => ({ ...x, readAt: null }));
+          return { schemaVersion: 1, product: 'geod', accountId: null, checkedAt: new Date().toISOString(), unreadCount: items.length, items };
         }
-        if (command === 'notifications_read') { qa.reads++; for (const item of qa.items) if (args.messageIds.includes(item.id)) item.readAt = new Date().toISOString(); return { accountId: qa.auth.userId, accepted: args.messageIds.length }; }
         if (command === 'notifications_open_link') return;
         throw new Error('Unexpected native command ' + command);
       } };
@@ -54,26 +50,29 @@ try {
     const zh = lang === 'zh-CN';
     await page.getByRole('button', { name: zh ? '消息中心' : 'Message center', exact: true }).click();
     await page.getByRole('button', { name: new RegExp(zh ? 'GeoD 更新通知 1' : 'GeoD update 1') }).first().click();
-    await page.waitForFunction(() => window.__qa.reads === 1);
+
     await page.waitForFunction(() => document.querySelector('[role=dialog]')?.textContent.includes('13'));
     const scroll = await page.locator('[role=dialog] .overflow-y-auto').evaluate(el => ({ height: el.clientHeight, total: el.scrollHeight }));
     assert(scroll.total > scroll.height); assert(scroll.height <= size.height * .55 + 2);
     await page.screenshot({ path: `${out}/messages-${lang}-${theme}.png` });
     await page.getByRole('button', { name: zh ? '全部已读' : 'Mark all read' }).click();
-    await page.waitForFunction(() => window.__qa.reads === 2);
+
     await page.getByRole('button', { name: zh ? '未读' : 'Unread', exact: true }).click();
     await page.getByText(zh ? '没有未读消息' : 'No unread messages', { exact: true }).waitFor();
     await page.evaluate(() => window.__qa.fail = true);
     await page.getByRole('button', { name: zh ? '刷新消息' : 'Refresh messages' }).click();
     await page.getByRole('alert').filter({ hasText: 'QA offline' }).waitFor();
-    await page.evaluate(() => { window.__qa.fail = false; window.__qa.auth = { state: 'connected', userId: 'qa-b', error: null }; window.dispatchEvent(new Event('focus')); });
+    await page.evaluate(() => window.__qa.fail = false);
+    await page.getByRole('button', { name: zh ? '全部消息' : 'All messages', exact: true }).click();
+    await page.getByRole('button', { name: zh ? '刷新消息' : 'Refresh messages' }).click();
+    await page.getByRole('button', { name: zh ? '未读' : 'Unread', exact: true }).click();
     await page.getByText(zh ? '没有未读消息' : 'No unread messages', { exact: true }).waitFor();
-    assert.equal(await page.locator('article').count(), 0);
-    await page.getByRole('button', { name: zh ? '退出账号' : 'Sign out' }).click();
-    await page.getByRole('button', { name: zh ? '登录 GeoD' : 'Sign in to GeoD' }).waitFor();
-    assert.equal(await page.locator('article').count(), 0);
+    await page.getByRole('button', { name: zh ? '全部消息' : 'All messages', exact: true }).click();
+    assert.equal(await page.getByRole('button', { name: zh ? '登录 GeoD' : 'Sign in to GeoD' }).count(), 0);
+    assert.equal(await page.evaluate(() => window.__qa.calls.some(x => x.command.startsWith('auth_') || x.command === 'notifications_read')), false);
+    await page.screenshot({ path: out + '/public-messages-' + lang + '-' + theme + '.png' });
     assert.deepEqual(errors, []);
-    report.push({ lang, theme, viewport: size, checks: ['unread', 'expand-read-sync', 'read-all', 'scroll-bound', 'offline-cache', 'account-switch', 'logout'], scroll });
+    report.push({ lang, theme, viewport: size, checks: ['unread', 'local-read-persistence', 'read-all', 'scroll-bound', 'offline-cache', 'no-login-controls', 'no-account-commands'], scroll });
     await page.close();
   }
   // Full desktop shell (no native mock) checks placement and real layout integration.
@@ -83,7 +82,7 @@ try {
   await page.goto('http://127.0.0.1:1431/');
   await page.screenshot({ path: `${out}/desktop-initial-debug.png` });
   await page.locator('button[aria-label="消息中心"]').click();
-  await page.getByText('连接 GeoD 账号', { exact: true }).waitFor();
+  await page.getByText('公共公告 · 已读状态保存在本机', { exact: true }).waitFor();
   await page.screenshot({ path: `${out}/desktop-message-entry.png` });
   writeFileSync(`${out}/ui-report.json`, JSON.stringify({ fixtureOnly: true, report, fullShell: true }, null, 2));
   console.log(JSON.stringify({ ok: true, report, fullShell: true }));

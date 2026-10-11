@@ -1,24 +1,19 @@
 const enUS = {
   notifications: {
+    "guest": "Public notices · Read status saved on this device",
   "title": "Message center",
-  "description": "Product updates, service notices and account messages.",
+  "description": "Product updates and service notices. No sign-in required.",
   "all": "All messages",
   "unread": "Unread",
   "readAll": "Mark all read",
   "refresh": "Refresh messages",
   "view": "View message",
-  "accountMismatch": "Message response does not match the active account.",
+  "accountMismatch": "Invalid public notice response.",
   "cached": "Showing previously saved messages.",
-  "connect": "Connect your GeoD account",
-  "connectDescription": "Authorize in your browser to receive announcements and account notices with synced read status.",
-  "login": "Sign in to GeoD",
-  "waiting": "Waiting for browser authorization…",
   "loading": "Loading messages…",
   "noUnread": "No unread messages",
   "empty": "No messages yet",
   "important": "Important",
-  "connected": "GeoD account connected · Read status synced",
-  "logout": "Sign out",
   "unreadCount": "Message center, {{count}} unread"
 },
   app: {
