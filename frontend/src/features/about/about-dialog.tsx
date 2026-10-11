@@ -65,7 +65,10 @@ export function AboutDialog() {
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>GeoDownloader</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            <img src="/geod-symbol-blue.png" alt="" aria-hidden="true" className="size-8 object-contain" />
+            GeoDownloader
+          </DialogTitle>
           <DialogDescription>
             遥感影像、DEM、Wayback、3D Tiles 与矢量瓦片的桌面下载工具。
           </DialogDescription>

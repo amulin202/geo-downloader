@@ -7,6 +7,7 @@ import {
 } from './telemetry-client'
 import { TelemetryConsentDialog } from './telemetry-consent-dialog'
 import { useTelemetryStore } from './telemetry-store'
+import { startDownloadTelemetry } from './download-monitor'
 
 export function TelemetryBootstrap() {
   const consent = useTelemetryStore((state) => state.consent)
@@ -15,13 +16,19 @@ export function TelemetryBootstrap() {
   const trackedStartupRef = useRef(false)
 
   useEffect(() => {
+    if (consent !== 'enabled') return
+    return startDownloadTelemetry()
+  }, [consent])
+
+  useEffect(() => {
     if (consent !== 'enabled') {
       clearTelemetryQueue()
       return
     }
-    if (trackedStartupRef.current) return
-    trackedStartupRef.current = true
-    void trackTelemetry('app_started', {})
+    if (!trackedStartupRef.current) {
+      trackedStartupRef.current = true
+      void trackTelemetry('app_started', {})
+    }
     void flushTelemetry()
 
     const handleOnline = () => void flushTelemetry()

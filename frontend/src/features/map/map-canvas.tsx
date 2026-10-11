@@ -37,7 +37,7 @@ import { isMvtUrl } from '@/features/mvt/is-mvt-url'
 import { discoverLayers as discoverMvtLayers, buildStyle as buildMvtStyle } from '@/features/mvt/mvt-style'
 import {
   OSM_COPYRIGHT_URL,
-  OSM_STANDARD_SOURCE_ID,
+  isOsmOfflineBlocked,
 } from '@/features/sources/osm-download-policy'
 
 // 修复 Leaflet 默认图标路径
@@ -54,11 +54,7 @@ L.Icon.Default.mergeOptions({ iconRetinaUrl, iconUrl, shadowUrl })
 const OSM_STANDARD_ATTRIBUTION = `&copy; <a href="${OSM_COPYRIGHT_URL}" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors`
 
 function isOsmStandardTileUrl(url: string): boolean {
-  try {
-    return new URL(url.replace('{s}.', '')).hostname === 'tile.openstreetmap.org'
-  } catch {
-    return false
-  }
+  return isOsmOfflineBlocked('', url)
 }
 
 // 修复 leaflet-draw 1.0.4 的 readableArea ReferenceError(type is not defined)
@@ -991,7 +987,7 @@ export function MapCanvas() {
       if (isMvtUrl(c.url)) continue
       try {
         const isOsmStandard =
-          key === OSM_STANDARD_SOURCE_ID && isOsmStandardTileUrl(c.url)
+          isOsmStandardTileUrl(c.url)
         // OSM Standard 仅用于交互预览，交给 WebView 的 HTTP 缓存处理，
         // 避免写入 GeoD 的长期离线瓦片缓存。
         const layer = isOsmStandard

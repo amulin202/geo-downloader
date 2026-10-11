@@ -1,4 +1,21 @@
 const enUS = {
+  notifications: {
+    "guest": "Public notices · Read status saved on this device",
+  "title": "Message center",
+  "description": "Product updates and service notices. No sign-in required.",
+  "all": "All messages",
+  "unread": "Unread",
+  "readAll": "Mark all read",
+  "refresh": "Refresh messages",
+  "view": "View message",
+  "accountMismatch": "Invalid public notice response.",
+  "cached": "Showing previously saved messages.",
+  "loading": "Loading messages…",
+  "noUnread": "No unread messages",
+  "empty": "No messages yet",
+  "important": "Important",
+  "unreadCount": "Message center, {{count}} unread"
+},
   app: {
     modes: {
       imagery: {
@@ -896,7 +913,7 @@ const enUS = {
     consentDescription: 'Allow GeoD to send a minimal amount of anonymous usage data? No anonymous ID is created and no analytics are sent before you agree.',
     scope: 'Data collected',
     install: 'A randomly generated anonymous installation ID, app version, and operating system type.',
-    usage: 'App launches, feature modes, download task creation, and task actions.',
+    usage: 'App launches, feature modes, task actions and completion, failure or cancellation, duration ranges and error categories.',
     features: 'Region selection methods, import outcomes, bookmarks, measurements, and guided tour events.',
     buckets: 'Counts are grouped into ranges; map content and business data are never uploaded.',
     excluded: 'GeoD does not collect download URLs, file paths, file names, searches, map coordinates, selected regions, tokens, API keys, or downloaded data. Analytics never affects downloads and can be disabled or reset at any time.',
@@ -915,12 +932,11 @@ const enUS = {
     download: 'Open download',
   },
   osmPolicy: {
-    title: 'OpenStreetMap Standard download notice',
+    title: 'This source does not support offline downloads',
     description: 'The public OpenStreetMap Standard tile service is intended for interactive browsing. Its usage policy prohibits bulk downloads, prefetching, and offline tile packages.',
     recommendation: 'Switch to a self-hosted tile service or a provider that explicitly permits downloading and offline use. Downloading OSM vector features through Overpass does not use the Standard tile service.',
-    acknowledgement: 'Choosing “Continue anyway” confirms that you understand the service policy and access risks. GeoD will not ask again during this app session, but will ask after a restart.',
+    previewAvailable: 'You can still browse OpenStreetMap Standard online. Switch to a source that permits offline use before creating a download task.',
     copyright: 'Copyright and attribution',
-    continue: 'Continue anyway',
     switch: 'Switch source',
   },
 } as const

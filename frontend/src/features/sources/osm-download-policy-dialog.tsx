@@ -23,18 +23,21 @@ export function OsmDownloadPolicyDialog() {
   const { t } = useTranslation()
   const [request, setRequest] = useState<OsmDownloadPolicyRequest | null>(null)
   const switchButtonRef = useRef<HTMLButtonElement>(null)
+  const returnFocusRef = useRef<HTMLElement | null>(null)
 
   useEffect(() => {
     const onRequest = (event: Event) => {
       const detail = (event as CustomEvent<OsmDownloadPolicyRequest>).detail
       if (!detail?.resolve) return
+      returnFocusRef.current = document.activeElement instanceof HTMLElement
+        ? document.activeElement : null
       setRequest(detail)
     }
     window.addEventListener(OSM_DOWNLOAD_POLICY_EVENT, onRequest)
     return () => window.removeEventListener(OSM_DOWNLOAD_POLICY_EVENT, onRequest)
   }, [])
 
-  const finish = (decision: OsmDownloadPolicyDecision) => {
+  const finish = (decision: Exclude<OsmDownloadPolicyDecision, 'continue'>) => {
     const current = request
     setRequest(null)
     current?.resolve(decision)
@@ -47,6 +50,10 @@ export function OsmDownloadPolicyDialog() {
         onOpenAutoFocus={(event) => {
           event.preventDefault()
           switchButtonRef.current?.focus()
+        }}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault()
+          if (returnFocusRef.current?.isConnected) returnFocusRef.current.focus()
         }}
       >
         <DialogHeader>
@@ -68,7 +75,7 @@ export function OsmDownloadPolicyDialog() {
             {t('osmPolicy.recommendation')}
           </div>
           <p className="text-muted-foreground">
-            {t('osmPolicy.acknowledgement')}
+            {t('osmPolicy.previewAvailable')}
           </p>
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
             <a
@@ -93,9 +100,6 @@ export function OsmDownloadPolicyDialog() {
         <DialogFooter className="gap-2 sm:space-x-0">
           <Button variant="ghost" onClick={() => finish('cancel')}>
             {t('common.cancel')}
-          </Button>
-          <Button variant="outline" onClick={() => finish('continue')}>
-            {t('osmPolicy.continue')}
           </Button>
           <Button ref={switchButtonRef} onClick={() => finish('switch')}>
             {t('osmPolicy.switch')}

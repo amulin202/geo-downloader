@@ -1,4 +1,21 @@
 const zhCN = {
+  notifications: {
+    "guest": "公共公告 · 已读状态保存在本机",
+  "title": "消息中心",
+  "description": "产品更新与服务公告，无需登录。",
+  "all": "全部消息",
+  "unread": "未读",
+  "readAll": "全部已读",
+  "refresh": "刷新消息",
+  "view": "查看消息",
+  "accountMismatch": "公共公告响应无效。",
+  "cached": "正在显示上次保存的消息。",
+  "loading": "正在加载消息…",
+  "noUnread": "没有未读消息",
+  "empty": "暂无消息",
+  "important": "重要",
+  "unreadCount": "消息中心，{{count}} 条未读"
+},
   app: {
     modes: {
       imagery: {
@@ -896,7 +913,7 @@ const zhCN = {
     consentDescription: '是否允许发送最少量的匿名使用数据？同意前不会生成匿名标识，也不会发送任何统计信息。',
     scope: '收集范围',
     install: '随机生成的匿名安装标识、应用版本和操作系统类型。',
-    usage: '应用启动、功能模式、下载任务创建和任务操作的使用情况。',
+    usage: '应用启动、功能模式、下载任务操作与完成、失败、取消结果，以及耗时区间和错误类别。',
     features: '范围选择方式、导入结果、书签、量测和新手引导等功能事件。',
     buckets: '数量仅按区间统计，不上传具体地图内容或业务数据。',
     excluded: '不收集下载地址、文件路径、文件名、搜索内容、地图坐标、选区范围、Token、API Key 或下载的数据。统计不会影响任何下载功能，可随时在设置中关闭或重置匿名标识。',
@@ -915,12 +932,11 @@ const zhCN = {
     download: '前往下载',
   },
   osmPolicy: {
-    title: 'OpenStreetMap Standard 下载提示',
+    title: '此图源不支持离线下载',
     description: 'OpenStreetMap 公共标准瓦片服务主要用于交互式浏览，其使用政策不允许批量下载、预取或制作离线瓦片包。',
     recommendation: '建议切换到自建瓦片服务，或使用明确允许下载和离线使用的服务商。通过 Overpass 下载 OSM 矢量要素不属于此标准瓦片服务。',
-    acknowledgement: '选择“仍然继续”表示你已了解服务政策和访问风险。本次应用运行期间不再重复提示，重新启动后会再次确认。',
+    previewAvailable: '你仍可使用 OpenStreetMap Standard 在线浏览地图。创建下载任务前，请切换到允许离线使用的图源。',
     copyright: '版权与署名要求',
-    continue: '仍然继续',
     switch: '切换图源',
   },
 } as const

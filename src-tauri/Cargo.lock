@@ -1767,7 +1767,7 @@ dependencies = [
 
 [[package]]
 name = "geo-downloader"
-version = "3.6.10"
+version = "3.6.11"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4208,6 +4208,7 @@ dependencies = [
  "cookie",
  "cookie_store 0.22.0",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2",
