@@ -396,6 +396,7 @@ const enUS = {
       deflate: 'Deflate (smallest file)',
     },
     crop: {
+      tilesHint: 'When enabled, exports PNG with transparent pixels outside the boundary, keeping tile dimensions and z/x/y coordinates. Files may be larger than JPG.',
       polygon: 'Crop precisely to the polygon',
       bounds: 'Crop to the rectangular extent',
       hint: 'Enabled by default; pixels outside are transparent',

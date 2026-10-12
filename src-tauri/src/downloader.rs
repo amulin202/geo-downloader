@@ -427,7 +427,17 @@ impl TileDownloader {
 
         // 检查已存在的瓦片文件（断点续传）
         let mut need_download: Vec<TileCoord> = Vec::new();
-        for tile in &tiles {
+        for (index, tile) in tiles.iter().enumerate() {
+            if index % 256 == 0 {
+                tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => return Err("任务已取消".into()),
+                    _ = async {
+                        if let Some(pc) = pause_control { pc.wait_if_paused().await; }
+                        tokio::task::yield_now().await;
+                    } => {},
+                }
+            }
             let sharded_path = temp_dir
                 .join(tile.x.to_string())
                 .join(format!("{}.png", tile.y));
@@ -470,13 +480,8 @@ impl TileDownloader {
         }
 
         // ===== 缓存命中批量预过滤（Issue #25 + #26）=====
-        // 在并发循环之前，先用一条 SQL 批量识别已缓存的瓦片，单线程拉 bytes 直接装进
-        // `tile_files`（TileSource::Bytes），由 merger 零拷贝读取。
-        //
-        // - #25 起：用 `contains_batch` 一条 SQL 批量识别，避免每张瓦片占用并发槽位
-        //   + 一次 SQL prepare/query。实测：1258 张全命中 SQL 仅 3-5ms。
-        // - #26 起：跳过 `temp_dir` 写盘 + merger 再 read 的双重 IO，命中瓦片 bytes
-        //   直接装进 `MergerTileSource::Bytes`，由 `Arc<Vec<u8>>` 引用计数共享。
+        // 批量查询坐标，但命中数据逐张落盘，只保留路径。
+        // 大任务不能将全部主瓦片及注记的压缩字节一起留在内存。
         let mut cache_hit_count = 0u32;
         if tcache::get_config().enabled && !need_download.is_empty() {
             let coords: Vec<CacheCoord> = need_download
@@ -495,17 +500,32 @@ impl TileDownloader {
                             })
                         });
 
-                    // #26：命中瓦片直接装进 tile_files（内存路径），跳过 temp_dir 写盘 IO
                     for tile in cached_tiles {
+                        tokio::select! {
+                            biased;
+                            _ = cancellation.cancelled() => return Err("任务已取消".into()),
+                            _ = async {
+                                if let Some(pc) = pause_control { pc.wait_if_paused().await; }
+                            } => {},
+                        }
                         let coord = CacheCoord { z: tile.z as u8, x: tile.x, y: tile.y };
                         if let Ok(Some(stored)) = tcache::Store::global().get(&cache_src, coord) {
                             if tile_payload::validate(&stored.bytes, None).is_ok() {
                                 tile_files.insert(
                                     (tile.x, tile.y),
-                                    MergerTileSource::from_bytes(stored.bytes),
+                                    persist_cached_tile(
+                                        temp_dir.join(tile.x.to_string()).join(format!("{}.png", tile.y)),
+                                        stored.bytes,
+                                    ).await?,
                                 );
                                 completed += 1;
                                 cache_hit_count += 1;
+                                if cache_hit_count % 1000 == 0 {
+                                    progress_callback(DownloadProgress {
+                                        total, completed, failed, no_data: 0, browse_filled: 0,
+                                        status: format!("读取缓存瓦片：{}/{}", completed, total),
+                                    });
+                                }
                                 continue;
                             }
                         }
@@ -559,16 +579,16 @@ impl TileDownloader {
                 if !active_downloads::is_still_pending(&ask, coord) {
                     if let Ok(Some(stored)) = tcache::Store::global().get(&cs, coord) {
                         if tile_payload::validate(&stored.bytes, None).is_ok() {
-                            return (tile, Ok(MergerTileSource::from_bytes(stored.bytes)));
+                            return (tile, persist_cached_tile(file_path, stored.bytes).await);
                         }
                     }
                 }
 
-                // 2) 优先查缓存（#26：直接返回 Bytes，不写 temp_dir）
+                // 2) 优先查缓存，逐张落盘以限制内存占用
                 if tcache::get_config().enabled {
                     if let Ok(Some(stored)) = tcache::Store::global().get(&cs, coord) {
                         if tile_payload::validate(&stored.bytes, None).is_ok() {
-                            return (tile, Ok(MergerTileSource::from_bytes(stored.bytes)));
+                            return (tile, persist_cached_tile(file_path, stored.bytes).await);
                         }
                     }
                 }
@@ -777,11 +797,11 @@ impl TileDownloader {
                     let file_path = td.join(format!("{}_{}.png", tile.x, tile.y));
                     let coord = CacheCoord { z: tile.z as u8, x: tile.x, y: tile.y };
 
-                    // 缓存命中直接返回 Bytes，跳过 temp_dir IO（#26）
+                    // 重试命中同样落盘，不累计压缩字节
                     if tcache::get_config().enabled {
                         if let Ok(Some(stored)) = tcache::Store::global().get(&cs, coord) {
                             if tile_payload::validate(&stored.bytes, None).is_ok() {
-                                return (tile, Ok(MergerTileSource::from_bytes(stored.bytes)));
+                                return (tile, persist_cached_tile(file_path, stored.bytes).await);
                             }
                         }
                     }
@@ -913,9 +933,43 @@ fn tile_quadkey(x: u32, y: u32, z: u8) -> String {
     key
 }
 
+// Cached payloads must not accumulate in the task's tile map.
+async fn persist_cached_tile(
+    path: std::path::PathBuf,
+    bytes: Vec<u8>,
+) -> Result<MergerTileSource, String> {
+    let partial = path.with_extension("cache-part");
+    let result = async {
+        if let Some(parent) = path.parent() { tokio::fs::create_dir_all(parent).await?; }
+        tokio::fs::write(&partial, bytes).await?;
+        tokio::fs::rename(&partial, &path).await
+    }.await;
+    if let Err(error) = result {
+        let _ = tokio::fs::remove_file(&partial).await;
+        return Err(format!("TILE_STORAGE_FAILED: 写入缓存瓦片失败: {error}"));
+    }
+    Ok(MergerTileSource::from_path(path))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cached_payload_is_persisted_and_only_a_path_is_retained() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("12/34.png");
+        for bytes in [vec![1; 4096], vec![2; 8192]] {
+            let source = persist_cached_tile(path.clone(), bytes.clone()).await.unwrap();
+            assert!(matches!(source, MergerTileSource::Path(_)));
+            assert_eq!(source.bytes().unwrap().as_ref(), bytes);
+            assert!(!path.with_extension("cache-part").exists());
+        }
+        let blocked = dir.path().join("file");
+        std::fs::write(&blocked, b"occupied").unwrap();
+        let error = persist_cached_tile(blocked.join("tile.png"), vec![1]).await.unwrap_err();
+        assert!(tile_policy::is_terminal_download_error(&error));
+    }
 
     async fn mock_tile_server(response: Vec<u8>) -> (String, Arc<AtomicU32>, tokio::task::JoinHandle<()>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};

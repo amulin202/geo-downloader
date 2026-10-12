@@ -396,6 +396,7 @@ const zhCN = {
       deflate: 'Deflate（体积最小）',
     },
     crop: {
+      tilesHint: '开启后输出 PNG，界外透明，保留瓦片尺寸及 z/x/y 编号；文件可能比 JPG 更大',
       polygon: '按多边形精确裁剪',
       bounds: '按矩形范围裁剪',
       hint: '默认开启，框外透明',

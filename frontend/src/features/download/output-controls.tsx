@@ -79,12 +79,14 @@ export function SelectionCropToggle({
   checked,
   onChange,
   className,
+  hintKey = 'download.crop.hint',
 }: {
   bounds: Bounds | null | undefined
   polygon: Polygon | null | undefined
   checked: boolean
   onChange: (checked: boolean) => void
   className?: string
+  hintKey?: string
 }) {
   const { t } = useTranslation()
 
@@ -105,7 +107,7 @@ export function SelectionCropToggle({
       />
       <span>
         {t(polygon && polygon.length > 0 ? 'download.crop.polygon' : 'download.crop.bounds')}
-        <span className="ml-1 text-muted-foreground">{t('download.crop.hint')}</span>
+        <span className="ml-1 text-muted-foreground">{t(hintKey)}</span>
       </span>
     </label>
   )

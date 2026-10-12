@@ -470,7 +470,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
   const [estimate, setEstimate] = useState<DownloadEstimate | null>(null)
   const qc = useQueryClient()
   const dispatchCtx = useMultiFeatureSubmit()
-  const supportsSelectionCrop = (format === 'geotiff' || format === 'png') && !isMvtMode
+  const supportsSelectionCrop = (format === 'geotiff' || format === 'png' || format === 'tiles') && !isMvtMode
   const effectiveCropToShape = cropToShape && supportsSelectionCrop
 
   const submitMutation = useMutation({
@@ -783,6 +783,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
                 polygon={polygon}
                 checked={cropToShape}
                 onChange={setCropToShape}
+                hintKey={format === 'tiles' ? 'download.crop.tilesHint' : undefined}
               />
             )}
           </div>

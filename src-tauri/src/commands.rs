@@ -594,6 +594,9 @@ fn estimate_download_with_settings(
 
     let estimated_output_mb: f64 = if is_geotiff {
         raw_rgb_mb * pyramid_mul * comp_mul
+    } else if format_class_export == ExportFormat::Tiles && has_crop {
+        // Cropped tile directories encode PNG instead of copying original JPEG bytes.
+        raw_rgb_mb * 0.4
     } else if is_tile_pack {
         tile_download_mb
     } else {
@@ -627,6 +630,9 @@ fn estimate_download_with_settings(
             notes.push("裁剪输出含 alpha 通道（RGBA）".to_string());
         }
     }
+    if format_class_export == ExportFormat::Tiles && has_crop {
+        notes.push("边界裁剪将输出透明 PNG 瓦片，保留原瓦片尺寸及 z/x/y 编号；体积可能大于原始 JPG".to_string());
+    }
     if multi_zoom {
         notes.push(format!("将生成 {} 个文件（z{}~z{}），按子目录分级保存", levels.len(), level_min, level_max));
     }
@@ -646,6 +652,8 @@ fn estimate_download_with_settings(
     // GeoTIFF 一律走流式路径（含裁剪），内存占用极低
     let format_class = if is_geotiff {
         FormatClass::StreamingTiff
+    } else if is_tile_pack {
+        FormatClass::TileByTile
     } else {
         FormatClass::RasterImage
     };
@@ -1106,7 +1114,7 @@ async fn execute_zoom_level(
 
     // ===== 叠加图层合成 =====
     // 当 request.overlay_sources 非空时，对每个叠加图层下载相同 z/x/y 瓦片，并按顺序
-    // alpha-composite 到主源瓦片上（in-place 覆写为 PNG）。downstream 流程（流式 GeoTIFF /
+    // alpha-composite 到独立的 PNG 文件中，保留原始输入供中断恢复。downstream 流程（流式 GeoTIFF /
     // PNG / Mbtiles / 原始目录）随后会看到合成后的 PNG 内容，无须额外改造。
     let mut composited = false;
     if let Some(overlay_ids) = request.overlay_sources.as_ref() {
@@ -1179,53 +1187,30 @@ async fn execute_zoom_level(
                 per_layer_files.push(ov_files);
             }
 
-            // 对每张主瓦片做合成（合成结果直接更新 tile_files entry 为 Bytes，跳过临时落盘）
+            // 逐张合成落盘，导出仅持有路径；图像处理在 blocking worker 中进行。
             let p_composite = map_progress(87.0);
             tm.update_progress(task_id, TaskStatus::Downloading, p_composite, completed_after_download, failed_after_download, Some("合成叠加瓦片...".to_string()));
-            let mut composite_ok = 0usize;
-            let mut composite_err = 0usize;
-            // 先在不可变借用下收集合成产物，循环外批量 apply 到 tile_files
-            let mut composites_to_apply: Vec<((u32, u32), Vec<u8>)> = Vec::new();
-            for (&(x, y), main_source) in tile_files.iter() {
-                let main_bytes = match main_source.bytes() {
-                    Ok(b) => b,
-                    Err(_) => { composite_err += 1; continue; }
-                };
-                let mut base_img = match image::load_from_memory(&main_bytes) {
-                    Ok(img) => img.to_rgba8(),
-                    Err(_) => { composite_err += 1; continue; }
-                };
-                let mut layered = false;
-                for ov_files in per_layer_files.iter() {
-                    if let Some(ov_source) = ov_files.get(&(x, y)) {
-                        if let Ok(ob) = ov_source.bytes() {
-                            if let Ok(ov_img) = image::load_from_memory(&ob) {
-                                let ov_rgba = ov_img.to_rgba8();
-                                if ov_rgba.dimensions() == base_img.dimensions() {
-                                    image::imageops::overlay(&mut base_img, &ov_rgba, 0, 0);
-                                    layered = true;
-                                }
-                            }
-                        }
-                    }
-                }
-                if layered {
-                    let mut out: Vec<u8> = Vec::with_capacity(main_bytes.len());
-                    if image::DynamicImage::ImageRgba8(base_img)
-                        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
-                        .is_ok()
-                    {
-                        composites_to_apply.push(((x, y), out));
-                        composite_ok += 1;
-                        continue;
-                    }
-                }
-                composite_err += 1;
-            }
-            // 批量替换：合成后的 PNG bytes 直接作为后续 merger / 打包阶段的瓦片源
-            for ((x, y), bytes) in composites_to_apply {
-                tile_files.insert((x, y), crate::merger::TileSource::from_bytes(bytes));
-            }
+            let (composite_ok, composite_err) = crate::overlay::composite_tiles_to_disk(
+                &mut tile_files,
+                &per_layer_files,
+                &temp_dir.join("__composited"),
+                cancel_token,
+                pause_control,
+                |processed, total| {
+                    let progress = map_progress(87.0 + 0.8 * processed as f64 / total.max(1) as f64);
+                    let message = format!("合成叠加瓦片：{}/{}", processed, total);
+                    tm.update_progress(task_id, TaskStatus::Downloading, progress, completed_after_download, failed_after_download, Some(message.clone()));
+                    let _ = app.emit(&event_name, TaskProgressPayload {
+                        task_id: task_id.to_string(),
+                        status: "downloading".to_string(),
+                        progress,
+                        completed: completed_after_download,
+                        total: total_tiles,
+                        message: Some(message),
+                    });
+                },
+            ).await?;
+            drop(per_layer_files);
             // 清理 overlay 临时目录
             for idx in 0..overlay_list.len() {
                 let _ = std::fs::remove_dir_all(temp_dir.join(format!("__overlay_{}", idx)));
@@ -1326,7 +1311,31 @@ async fn execute_zoom_level(
 
     let file_size;
 
-    if is_raw_tiles {
+    if format == ExportFormat::Tiles && request.crop_to_shape {
+        let polygons: Vec<Vec<merger::PolygonPoint>> = request.polygon.as_ref().map(|polygons| {
+            polygons.iter().map(|ring| ring.iter().map(|point| merger::PolygonPoint { lat: point.lat, lng: point.lng }).collect()).collect()
+        }).unwrap_or_else(|| vec![vec![
+            merger::PolygonPoint { lat: request.bounds.north, lng: request.bounds.west },
+            merger::PolygonPoint { lat: request.bounds.north, lng: request.bounds.east },
+            merger::PolygonPoint { lat: request.bounds.south, lng: request.bounds.east },
+            merger::PolygonPoint { lat: request.bounds.south, lng: request.bounds.west },
+        ]]);
+        task_log(app, tm, task_id, "INFO", "原始瓦片目录启用边界裁剪：逐张输出 PNG，保持瓦片尺寸及 z/x/y 编号");
+        let exported = crate::tile_crop::export_cropped_tiles(
+            &tile_files, &polygons, current_zoom, std::path::Path::new(&save_path), cancel_token, pause_control,
+            |processed, total| {
+                let progress = map_progress(88.0 + 11.0 * processed as f64 / total.max(1) as f64);
+                let message = format!("裁剪并导出瓦片：{}/{}", processed, total);
+                tm.update_progress(task_id, TaskStatus::Exporting, progress, completed_after_download, failed_after_download, Some(message.clone()));
+                let _ = app.emit(&event_name, TaskProgressPayload {
+                    task_id: task_id.to_string(), status: "exporting".to_string(), progress,
+                    completed: completed_after_download, total: total_tiles, message: Some(message),
+                });
+            },
+        ).await?;
+        file_size = exported.bytes;
+        task_log(app, tm, task_id, "INFO", &format!("边界裁剪完成：导出 {} 张 PNG，跳过界外 {} 张瓦片", exported.kept, exported.skipped));
+    } else if is_raw_tiles {
         // ===== 原始瓦片目录（{z}/{x}/{y}.<ext>），不拼接不重编码 =====
         let ext = if format == ExportFormat::Pbf {
             "pbf"
@@ -4501,6 +4510,27 @@ fn mime_to_format(mime: &str) -> &'static str {
 #[cfg(test)]
 mod memory_budget_tests {
     use super::*;
+
+    #[test]
+    fn reported_336660_raw_tiles_use_the_tile_working_set_estimate() {
+        let nw = tile::tile_to_latlng(1000, 1000, 15);
+        let se = tile::tile_to_latlng(1619, 1542, 15);
+        let bounds = Bounds {
+            north: (nw.north + nw.south) / 2.0,
+            south: (se.north + se.south) / 2.0,
+            west: (nw.west + nw.east) / 2.0,
+            east: (se.west + se.east) / 2.0,
+        };
+        for format in ["tiles", "mbtiles", "gpkg"] {
+            let result = estimate(bounds, 15, format);
+            assert_eq!(result.tile_count, 336_660);
+            assert_eq!((result.cols, result.rows), (620, 543));
+            assert!(result.allowed);
+            let budget = result.budget_check.unwrap();
+            assert!(budget.allowed, "{format} should not estimate a full raster canvas");
+            assert!(budget.estimated_peak_bytes < 512 * 1024 * 1024);
+        }
+    }
 
     fn estimate(bounds: Bounds, zoom: u8, format: &str) -> EstimateResult {
         estimate_download_with_settings(

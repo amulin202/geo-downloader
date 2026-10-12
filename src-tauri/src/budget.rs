@@ -123,6 +123,8 @@ pub fn get_system_memory() -> Option<SystemMemoryInfo> {
 /// 导出格式分类（用于内存估算）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FormatClass {
+    /// 原始瓦片 / MBTiles / GeoPackage：逐瓦片写入，不分配整幅画布。
+    TileByTile,
     /// 流式 GeoTIFF (strip-by-strip)
     StreamingTiff,
     /// 全量 GeoTIFF (in-memory)
@@ -140,6 +142,7 @@ pub enum FormatClass {
 /// | PNG/JPEG   | 2.5   | 5.0    |
 fn peak_multiplier(format: FormatClass, has_crop: bool) -> f64 {
     match (format, has_crop) {
+        (FormatClass::TileByTile, _) => 0.0, // Uses a path/index working-set estimate below.
         (FormatClass::StreamingTiff, _) => 0.05,
         (FormatClass::FullTiff, false) => 2.0,
         (FormatClass::FullTiff, true) => 3.5,
@@ -186,7 +189,14 @@ pub fn check_budget(
         .and_then(|v| v.checked_mul(channels))
         .unwrap_or(u64::MAX);
     let multiplier = peak_multiplier(format, has_crop);
-    let estimated_peak = (pixel_bytes as f64 * multiplier) as u64;
+    let estimated_peak = if format == FormatClass::TileByTile {
+        // Bounded decoder/encoder buffers plus path maps for main + three overlays.
+        // This is an approximate working set, not the size of the output files.
+        128u64.saturating_mul(1024 * 1024)
+            .saturating_add((cols as u64).saturating_mul(rows as u64).saturating_mul(1024))
+    } else {
+        (pixel_bytes as f64 * multiplier) as u64
+    };
 
     if budget_mb == 0 || estimated_peak <= budget_bytes {
         return BudgetCheckResult {
@@ -202,7 +212,11 @@ pub fn check_budget(
     let peak_mb = estimated_peak / (1024 * 1024);
 
     // 建议 1: 缩小区域
-    let safe_tiles = (budget_bytes as f64 / multiplier / (TILE_SIZE * TILE_SIZE * channels) as f64) as u64;
+    let safe_tiles = if format == FormatClass::TileByTile {
+        budget_bytes.saturating_sub(128 * 1024 * 1024) / 1024
+    } else {
+        (budget_bytes as f64 / multiplier / (TILE_SIZE * TILE_SIZE * channels) as f64) as u64
+    };
     suggestions.push(format!(
         "请缩小选区至约 {} 个瓦片（当前 {} 个）",
         safe_tiles,
@@ -210,12 +224,12 @@ pub fn check_budget(
     ));
 
     // 建议 2: 如果不是流式 TIFF，建议切换
-    if format != FormatClass::StreamingTiff {
+    if !matches!(format, FormatClass::StreamingTiff | FormatClass::TileByTile) {
         suggestions.push("请改用 GeoTIFF 格式（启用流式导出，内存消耗极低）".to_string());
     }
 
     // 建议 3: 如果有裁剪，建议关闭
-    if has_crop {
+    if has_crop && format != FormatClass::TileByTile {
         suggestions.push("请关闭多边形裁剪以降低内存消耗".to_string());
     }
 
@@ -250,6 +264,19 @@ pub fn format_budget_warning(result: &BudgetCheckResult) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raw_tile_directory_estimates_paths_instead_of_a_full_canvas() {
+        let result = check_budget(620, 543, FormatClass::TileByTile, false, 2048);
+        assert!(result.allowed);
+        assert!(result.estimated_peak_bytes < 512 * 1024 * 1024);
+        let cropped = check_budget(620, 543, FormatClass::TileByTile, true, 2048);
+        assert_eq!(result.estimated_peak_bytes, cropped.estimated_peak_bytes);
+        let small_budget = check_budget(620, 543, FormatClass::TileByTile, false, 256);
+        assert!(!small_budget.allowed);
+        assert!(!small_budget.suggestions.iter().any(|s| s.contains("GeoTIFF")));
+        assert!(check_budget(620, 543, FormatClass::TileByTile, false, 0).allowed);
+    }
 
     #[test]
     fn streaming_tiff_always_low_memory() {

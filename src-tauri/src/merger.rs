@@ -7,15 +7,14 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// 瓦片字节来源（Issue #26）：网络下载落盘文件 vs 缓存命中常驻内存。
+/// 瓦片字节来源：任务工作目录中的文件或调用方提供的共享字节。
 ///
-/// - `Path` 由 downloader 真实下载并落到 `temp_dir` 的瓦片，merger 走文件读取。
-/// - `Bytes` 由 `tile_cache::Store` 命中后直接交给 merger 的字节，
+/// - `Path` 用于下载、缓存命中和叠加合成；任务仅保留路径，逐瓦片读取。
+/// - `Bytes` 用于已有的内存调用方和测试，
 ///   `Arc<Vec<u8>>` 保证 `HashMap.clone()` 时只增加引用计数，
 ///   不复制底层数据，零拷贝。
 ///
-/// 设计依据 issue #26：100% 缓存命中场景下，跳过 N 次 `std::fs::write`
-/// 与 N 次 `std::fs::read`，把 #25 测得的 ~480ms 写盘 IO 压到 50ms 量级。
+/// 大任务不应将所有缓存或合成结果构造为 Bytes，否则内存会随总数据量增长。
 #[derive(Debug, Clone)]
 pub enum TileSource {
     Path(PathBuf),

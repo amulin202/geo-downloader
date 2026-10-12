@@ -25,6 +25,7 @@ struct ParsedTileUrl {
     url_template: String,
     sample_url: String,
     suggested_name: String,
+    subdomains: String,
     zoom: Option<u8>,
     x: Option<u32>,
     y: Option<u32>,
@@ -65,7 +66,7 @@ pub async fn analyze(raw_url: &str, proxy: Option<&str>) -> Result<SourceUrlAnal
         sample_url: parsed.sample_url.clone(),
         suggested_name: parsed.suggested_name.clone(),
         suggested_max_zoom,
-        subdomains: String::new(),
+        subdomains: parsed.subdomains.clone(),
         detected_zoom: parsed.zoom,
         detected_x: parsed.x,
         detected_y: parsed.y,
@@ -120,7 +121,7 @@ pub async fn analyze(raw_url: &str, proxy: Option<&str>) -> Result<SourceUrlAnal
         sample_url: parsed.sample_url,
         suggested_name: parsed.suggested_name,
         suggested_max_zoom,
-        subdomains: String::new(),
+        subdomains: parsed.subdomains,
         detected_zoom: parsed.zoom,
         detected_x: parsed.x,
         detected_y: parsed.y,
@@ -151,11 +152,13 @@ fn parse_tile_url(raw_url: &str) -> Result<ParsedTileUrl, String> {
     }
 
     if has_xyz_placeholders(&input) {
+        let subdomains = template_subdomains(&input);
+        let sample_subdomain = subdomains.split(',').next().unwrap_or("");
         let sample_url = input
             .replace("{z}", "1")
             .replace("{x}", "1")
             .replace("{y}", "1")
-            .replace("{s}", "a");
+            .replace("{s}", sample_subdomain);
         let parsed = reqwest::Url::parse(&sample_url)
             .map_err(|error| format!("URL 格式不正确: {error}"))?;
         ensure_http_url(&parsed)?;
@@ -163,6 +166,7 @@ fn parse_tile_url(raw_url: &str) -> Result<ParsedTileUrl, String> {
             url_template: input,
             sample_url,
             suggested_name: suggest_name(&parsed),
+            subdomains,
             zoom: None,
             x: None,
             y: None,
@@ -242,10 +246,29 @@ fn parse_tile_url(raw_url: &str) -> Result<ParsedTileUrl, String> {
         url_template: template,
         sample_url: input,
         suggested_name: suggest_name(&parsed),
+        subdomains: String::new(),
         zoom,
         x,
         y,
     })
+}
+
+/// Reuse known provider subdomains for both the sample request and saved source.
+/// Match the complete host pattern so fixed URL parameters are irrelevant.
+fn template_subdomains(template: &str) -> String {
+    if !template.contains("{s}") { return String::new(); }
+    let host_pattern = |url: &str| {
+        reqwest::Url::parse(&url.replace("{s}", "geod-subdomain"))
+            .ok().and_then(|url| url.host_str().map(str::to_owned))
+    };
+    if let Some(host) = host_pattern(template) {
+        for source in crate::config::get_tile_sources(None).values() {
+            if source.url.contains("{s}") && host_pattern(&source.url).as_ref() == Some(&host) {
+                return source.subdomains.join(",");
+            }
+        }
+    }
+    "a,b,c".to_string()
 }
 
 fn ensure_http_url(url: &reqwest::Url) -> Result<(), String> {
@@ -410,6 +433,45 @@ fn detect_tile_format(content_type: &str, bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::parse_tile_url;
+
+    #[test]
+    fn google_template_preserves_language_and_uses_numeric_subdomains() {
+        let template = "https://mt{s}.google.com/vt/lyrs=m&hl=en&x={x}&y={y}&z={z}";
+        let result = parse_tile_url(template).unwrap();
+        assert_eq!(result.url_template, template);
+        assert_eq!(result.subdomains, "0,1,2,3");
+        assert_eq!(result.sample_url, "https://mt0.google.com/vt/lyrs=m&hl=en&x=1&y=1&z=1");
+        assert!(result.sample_url.contains("hl=en"));
+        let mut source = crate::config::get_tile_sources(None)["google_map"].clone();
+        source.url = result.url_template;
+        source.subdomains = result.subdomains.split(',').map(str::to_owned).collect();
+        let downloader = crate::downloader::TileDownloader::new(source, None).unwrap();
+        let download_url = downloader.get_tile_url_public(&crate::tile::TileCoord { x: 10, y: 11, z: 5 });
+        assert!((0..4).any(|s| download_url == format!("https://mt{s}.google.com/vt/lyrs=m&hl=en&x=10&y=11&z=5")));
+    }
+
+    #[test]
+    fn templates_preserve_fixed_and_encoded_query_parameters() {
+        let template = "https://mt{s}.google.com/vt?lyrs=m&hl=en&x={x}&y={y}&z={z}&token=a%2Bb%3D";
+        let result = parse_tile_url(template).unwrap();
+        assert_eq!(result.url_template, template);
+        assert_eq!(result.subdomains, "0,1,2,3");
+        assert_eq!(result.sample_url, "https://mt0.google.com/vt?lyrs=m&hl=en&x=1&y=1&z=1&token=a%2Bb%3D");
+        let concrete = parse_tile_url("https://mt0.google.com/vt?lyrs=m&hl=en&x=10&y=11&z=5").unwrap();
+        assert_eq!(concrete.url_template, "https://mt0.google.com/vt?lyrs=m&hl=en&x={x}&y={y}&z={z}");
+        assert!(concrete.subdomains.is_empty());
+    }
+
+    #[test]
+    fn subdomain_inference_matches_hosts_and_preserves_generic_templates() {
+        let result = parse_tile_url("https://{s}.example.test/{z}/{x}/{y}.png?hl=en").unwrap();
+        assert_eq!(result.subdomains, "a,b,c");
+        assert_eq!(result.sample_url, "https://a.example.test/1/1/1.png?hl=en");
+        let result = parse_tile_url("https://mt{s}.google.com.example.test/{z}/{x}/{y}.png").unwrap();
+        assert_eq!(result.subdomains, "a,b,c");
+        let result = parse_tile_url("https://example.test/{z}/{x}/{y}.png?hl=en").unwrap();
+        assert!(result.subdomains.is_empty());
+    }
 
     #[test]
     fn parses_standard_xyz_path() {

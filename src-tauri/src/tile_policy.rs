@@ -54,6 +54,7 @@ pub fn is_terminal_download_error(error: &str) -> bool {
         "TILE_RATE_LIMITED:",
         "INVALID_TILE:",
         "TILE_TOO_LARGE:",
+        "TILE_STORAGE_FAILED:",
     ]
     .iter()
     .any(|prefix| error.starts_with(prefix))
