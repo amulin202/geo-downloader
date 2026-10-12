@@ -1,15 +1,11 @@
-//! 内存预算守卫模块
+//! 内存预算预警模块
 //!
-//! 在任务执行前预估峰值内存，超出预算时拒绝请求并给出可行建议。
+//! 在任务执行前预估峰值内存，超出预算时仅提示并给出可行建议。
 
 use serde::Serialize;
 
 /// 默认内存预算 (MB)
 pub const DEFAULT_BUDGET_MB: u64 = 2048;
-/// 最小允许预算 (MB)
-pub const MIN_BUDGET_MB: u64 = 512;
-/// 最大允许预算 (MB)
-pub const MAX_BUDGET_MB: u64 = 16384;
 
 /// 每个瓦片的像素尺寸
 const TILE_SIZE: u64 = 256;
@@ -159,7 +155,7 @@ pub struct BudgetCheckResult {
     pub estimated_peak_bytes: u64,
     /// 内存预算 (bytes)
     pub budget_bytes: u64,
-    /// 是否通过
+    /// 预估峰值是否在预算内；false 仅表示需要预警，不禁止下载或导出
     pub allowed: bool,
     /// 超预算时的建议列表
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -171,7 +167,7 @@ pub struct BudgetCheckResult {
 /// - `cols`, `rows`: 瓦片矩阵列数和行数
 /// - `format`: 导出格式分类
 /// - `has_crop`: 是否启用多边形裁剪
-/// - `budget_mb`: 内存预算 (MB)
+/// - `budget_mb`: 内存预警阈值 (MB)，0 表示不限
 pub fn check_budget(
     cols: u32,
     rows: u32,
@@ -179,8 +175,7 @@ pub fn check_budget(
     has_crop: bool,
     budget_mb: u64,
 ) -> BudgetCheckResult {
-    let budget_mb = budget_mb.clamp(MIN_BUDGET_MB, MAX_BUDGET_MB);
-    let budget_bytes = budget_mb * 1024 * 1024;
+    let budget_bytes = budget_mb.saturating_mul(1024 * 1024);
 
     // RGB 3 通道；裁剪时 RGBA 4 通道
     let channels: u64 = if has_crop { 4 } else { 3 };
@@ -193,7 +188,7 @@ pub fn check_budget(
     let multiplier = peak_multiplier(format, has_crop);
     let estimated_peak = (pixel_bytes as f64 * multiplier) as u64;
 
-    if estimated_peak <= budget_bytes {
+    if budget_mb == 0 || estimated_peak <= budget_bytes {
         return BudgetCheckResult {
             estimated_peak_bytes: estimated_peak,
             budget_bytes,
@@ -238,12 +233,12 @@ pub fn check_budget(
     }
 }
 
-/// 将预算检查失败转为用户友好的错误信息
-pub fn format_budget_error(result: &BudgetCheckResult) -> String {
+/// 将超预算结果转为用户友好的预警信息
+pub fn format_budget_warning(result: &BudgetCheckResult) -> String {
     let peak_mb = result.estimated_peak_bytes / (1024 * 1024);
     let budget_mb = result.budget_bytes / (1024 * 1024);
     let mut msg = format!(
-        "内存预算不足：预估峰值 {} MB，预算 {} MB。\n建议：\n",
+        "预估内存超过预算：预估峰值 {} MB，预算 {} MB。仅作提示，继续下载和导出。\n建议：\n",
         peak_mb, budget_mb
     );
     for (i, s) in result.suggestions.iter().enumerate() {
@@ -295,17 +290,36 @@ mod tests {
     }
 
     #[test]
-    fn budget_clamped() {
-        // budget below minimum gets clamped to MIN_BUDGET_MB
+    fn custom_budget_is_not_clamped() {
         let r = check_budget(10, 10, FormatClass::FullTiff, false, 100);
-        assert_eq!(r.budget_bytes, MIN_BUDGET_MB * 1024 * 1024);
+        assert_eq!(r.budget_bytes, 100 * 1024 * 1024);
+        let r = check_budget(200, 200, FormatClass::RasterImage, true, 98_304);
+        assert_eq!(r.budget_bytes, 98_304 * 1024 * 1024);
+        assert!(r.allowed);
     }
 
     #[test]
-    fn format_error_readable() {
+    fn unlimited_budget_disables_warnings() {
+        let r = check_budget(200, 200, FormatClass::RasterImage, true, 0);
+        assert!(r.allowed);
+        assert_eq!(r.budget_bytes, 0);
+        assert!(r.estimated_peak_bytes > 0);
+        assert!(r.suggestions.is_empty());
+    }
+
+    #[test]
+    fn large_budget_does_not_overflow() {
+        let r = check_budget(200, 200, FormatClass::RasterImage, true, u64::MAX);
+        assert!(r.allowed);
+        assert_eq!(r.budget_bytes, u64::MAX);
+    }
+
+    #[test]
+    fn format_warning_readable() {
         let r = check_budget(200, 200, FormatClass::RasterImage, true, 2048);
-        let msg = format_budget_error(&r);
-        assert!(msg.contains("内存预算不足"));
+        let msg = format_budget_warning(&r);
+        assert!(msg.contains("预估内存超过预算"));
+        assert!(msg.contains("仅作提示，继续下载和导出"));
         assert!(msg.contains("建议"));
     }
 

@@ -29,6 +29,9 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { getSettings, getSystemMemory, saveSettings } from './settings-api'
 import type { AppSettings } from '@/types/api'
+import { useTranslation } from 'react-i18next'
+import { WarningThresholdInput } from './warning-threshold-input'
+import { warningThresholdSchema } from './warning-threshold-schema'
 
 const FORMAT_OPTIONS = [
   { value: 'geotiff', label: 'GeoTIFF (.tif)' },
@@ -45,7 +48,8 @@ const settingsSchema = z.object({
   default_concurrency: z.number().int().min(1).max(100),
   default_zoom: z.number().int().min(0).max(22),
   default_format: z.enum(['geotiff', 'tiles', 'mbtiles', 'gpkg']),
-  memory_budget_mb: z.number().int().min(512).max(16384),
+  memory_budget_mb: warningThresholdSchema,
+  tile_count_warning: warningThresholdSchema,
   debug_mode: z.boolean(),
   allow_invalid_certs: z.boolean(),
 })
@@ -61,6 +65,7 @@ const DEFAULT_VALUES: SettingsFormValues = {
   default_zoom: 10,
   default_format: 'geotiff',
   memory_budget_mb: 2048,
+  tile_count_warning: 500000,
   debug_mode: false,
   allow_invalid_certs: false,
 }
@@ -80,6 +85,7 @@ function fromAppSettings(s: AppSettings | undefined): SettingsFormValues {
     default_zoom: s.default_zoom ?? 10,
     default_format: safeFmt,
     memory_budget_mb: s.memory_budget_mb ?? 2048,
+    tile_count_warning: s.tile_count_warning ?? 500000,
     debug_mode: s.debug_mode ?? false,
     allow_invalid_certs: s.allow_invalid_certs ?? false,
   }
@@ -96,6 +102,7 @@ function toAppSettings(values: SettingsFormValues, base: AppSettings | undefined
     default_zoom: values.default_zoom,
     default_format: values.default_format,
     memory_budget_mb: values.memory_budget_mb,
+    tile_count_warning: values.tile_count_warning,
     debug_mode: values.debug_mode,
     allow_invalid_certs: values.allow_invalid_certs,
   }
@@ -141,6 +148,9 @@ export function SettingsDialog() {
   const debugMode = useWatch({ control, name: 'debug_mode' })
   const allowInvalidCerts = useWatch({ control, name: 'allow_invalid_certs' })
   const defaultFormat = useWatch({ control, name: 'default_format' })
+  const { t } = useTranslation()
+  const memoryBudgetMb = useWatch({ control, name: 'memory_budget_mb' })
+  const tileCountWarning = useWatch({ control, name: 'tile_count_warning' })
 
   const mutation = useMutation({
     mutationFn: (values: SettingsFormValues) =>
@@ -290,18 +300,14 @@ export function SettingsDialog() {
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="memory_budget_mb">内存预算 MB (512-16384)</Label>
-                  <Input
+                  <WarningThresholdInput
                     id="memory_budget_mb"
-                    type="number"
-                    min={512}
-                    max={16384}
-                    step={256}
-                    {...register('memory_budget_mb', { valueAsNumber: true })}
+                    label={t('settings.fields.memory')}
+                    hint={t('settings.memoryHint')}
+                    value={memoryBudgetMb} defaultValue={2048}
+                    onChange={(value) => setValue('memory_budget_mb', value, { shouldDirty: true, shouldValidate: true })}
+                    error={errors.memory_budget_mb?.message}
                   />
-                  {errors.memory_budget_mb && (
-                    <p className="text-xs text-destructive">{errors.memory_budget_mb.message}</p>
-                  )}
                   {memoryQuery.data && (
                     <p className="text-xs text-muted-foreground">
                       系统总计 {Math.round(memoryQuery.data.total_mb)} MB / 可用{' '}
@@ -312,6 +318,12 @@ export function SettingsDialog() {
                     </p>
                   )}
                 </div>
+                <WarningThresholdInput id="tile_count_warning"
+                  label={t('settings.fields.tileCountWarning')}
+                  hint={t('settings.tileCountWarningHint')}
+                  value={tileCountWarning} defaultValue={500000}
+                  onChange={(value) => setValue('tile_count_warning', value, { shouldDirty: true, shouldValidate: true })}
+                  error={errors.tile_count_warning?.message} />
               </div>
             </section>
 

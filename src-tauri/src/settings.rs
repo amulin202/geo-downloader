@@ -89,11 +89,14 @@ pub struct AppSettings {
     /// 调试模式：保留临时瓦片目录
     #[serde(default)]
     pub debug_mode: bool,
-    /// 内存预算 (MB)，控制单次导出任务的最大内存占用
+    /// 内存预警预算 (MB)，用于提示单次导出任务的预估内存占用
     ///
-    /// 范围 512 - 16384，默认 2048。超出预算的导出请求会被拒绝并给出建议。
+    /// 默认 2048，0 表示不限（关闭预警）。超出预算仅提示，不拒绝下载或导出。
     #[serde(default = "default_memory_budget_mb")]
     pub memory_budget_mb: u64,
+    /// 跨所选缩放级别的瓦片总数预警阈值；默认 500000，0 表示不限。
+    #[serde(default = "default_tile_count_warning")]
+    pub tile_count_warning: u64,
     /// 允许接受无效的 HTTPS 证书（⚠️ 安全风险）
     ///
     /// 默认 `false` —— 严格验证 TLS 证书。仅在用户明确知晓风险（如企业
@@ -141,6 +144,7 @@ fn default_source() -> String { "osm".to_string() }
 fn default_ai_base_url() -> String { "https://api.deepseek.com/v1".to_string() }
 fn default_ai_model() -> String { "deepseek-v4-flash".to_string() }
 fn default_memory_budget_mb() -> u64 { 2048 }
+fn default_tile_count_warning() -> u64 { 500_000 }
 fn default_tile_cache_enabled() -> bool { true }
 fn default_tile_cache_max_size_mb() -> u64 { 5120 }
 fn default_min_export_success_ratio() -> f32 { 0.0 }
@@ -164,6 +168,7 @@ impl Default for AppSettings {
             ai_model: default_ai_model(),
             deepseek_api_key: None,
             memory_budget_mb: default_memory_budget_mb(),
+            tile_count_warning: default_tile_count_warning(),
             debug_mode: false,
             allow_invalid_certs: false,
             tile_cache_enabled: default_tile_cache_enabled(),
@@ -252,6 +257,39 @@ mod tests {
         assert_eq!(settings.ai_base_url, "https://api.deepseek.com/v1");
         assert_eq!(settings.ai_model, "deepseek-v4-flash");
         assert!(settings.deepseek_api_key.is_none());
+        assert_eq!(settings.memory_budget_mb, 2048);
+        assert_eq!(settings.tile_count_warning, 500_000);
+    }
+
+    #[test]
+    fn warning_thresholds_survive_save_and_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        for (memory, tiles) in [(98_304, 1_000_000), (0, 0)] {
+            let mut settings = AppSettings::default();
+            settings.memory_budget_mb = memory;
+            settings.tile_count_warning = tiles;
+            super::SettingsManager::from_file_path(path.clone()).save(&settings).unwrap();
+            let loaded = super::SettingsManager::from_file_path(path.clone()).get().unwrap();
+            assert_eq!(loaded.memory_budget_mb, memory);
+            assert_eq!(loaded.tile_count_warning, tiles);
+        }
+    }
+
+    #[test]
+    fn map_token_survives_save_reload_and_clear_without_changing_other_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let mut settings = AppSettings::default();
+        settings.tile_count_warning = 0;
+        for token in [Some("0123456789abcdef0123456789abcdef".to_string()), None] {
+            settings.tianditu_token = token.clone();
+            super::SettingsManager::from_file_path(path.clone()).save(&settings).unwrap();
+            let loaded = super::SettingsManager::from_file_path(path.clone()).get().unwrap();
+            assert_eq!(loaded.tianditu_token, token);
+            assert_eq!(loaded.tile_count_warning, 0);
+            assert_eq!(loaded.default_concurrency, settings.default_concurrency);
+        }
     }
 
     #[test]

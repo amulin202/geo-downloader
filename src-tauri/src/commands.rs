@@ -516,6 +516,25 @@ pub fn estimate_download(
     build_pyramid: Option<bool>,
     compression: Option<String>,
 ) -> EstimateResult {
+    let settings = SettingsManager::new().and_then(|m| m.get()).unwrap_or_default();
+    estimate_download_with_settings(
+        bounds, zoom, zoom_max, format, crop_to_shape, zoom_levels, source_id,
+        build_pyramid, compression, &settings,
+    )
+}
+
+fn estimate_download_with_settings(
+    bounds: Bounds,
+    zoom: u8,
+    zoom_max: Option<u8>,
+    format: Option<String>,
+    crop_to_shape: Option<bool>,
+    zoom_levels: Option<Vec<u8>>,
+    source_id: Option<String>,
+    build_pyramid: Option<bool>,
+    compression: Option<String>,
+    settings: &AppSettings,
+) -> EstimateResult {
     let z_min = zoom;
     let z_max = zoom_max.unwrap_or(zoom).max(zoom);
     // 优先使用离散级别集合
@@ -550,7 +569,7 @@ pub fn estimate_download(
     // 兼容老前端：estimated_size_mb 等同于 tile_download_mb
     let estimated_size_mb = tile_download_mb;
 
-    let max_tiles = 500_000u32;
+    let large_download_warning_tiles = settings.tile_count_warning;
 
     // 内存预算检查
     let fmt = format.as_deref().unwrap_or("geotiff");
@@ -613,26 +632,16 @@ pub fn estimate_download(
     }
     let size_note = if notes.is_empty() { None } else { Some(notes.join("；")) };
 
-    if tile_count > max_tiles {
-        return EstimateResult {
+    // 自定义阈值仅作预警；0 表示不限，不是下载上限。
+    let warning = if large_download_warning_tiles > 0 && u64::from(tile_count) > large_download_warning_tiles {
+        Some(format!(
+            "瓦片数量较多（{} 个瓦片{}），下载和导出可能耗时较长。仅作提示，仍可继续下载。",
             tile_count,
-            cols,
-            rows,
-            estimated_size_mb,
-            allowed: false,
-            warning: Some(format!(
-                "区域过大（{} 个瓦片{}），超过 {} 个上限。请缩小区域或降低缩放级别。",
-                tile_count,
-                if multi_zoom { format!("，跨 z{}~z{} 共 {} 级", level_min, level_max, levels.len()) } else { String::new() },
-                max_tiles
-            )),
-            budget_check: None,
-            raw_size_mb: raw_size_mb_opt,
-            size_note,
-            tile_download_mb,
-            estimated_output_mb,
-        };
-    }
+            if multi_zoom { format!("，跨 z{}~z{} 共 {} 级", level_min, level_max, levels.len()) } else { String::new() },
+        ))
+    } else {
+        None
+    };
 
     // GeoTIFF 一律走流式路径（含裁剪），内存占用极低
     let format_class = if is_geotiff {
@@ -641,38 +650,17 @@ pub fn estimate_download(
         FormatClass::RasterImage
     };
 
-    let budget_mb = SettingsManager::new()
-        .and_then(|m| m.get())
-        .map(|s| s.memory_budget_mb)
-        .unwrap_or(budget::DEFAULT_BUDGET_MB);
-
-    let bc = budget::check_budget(cols, rows, format_class, has_crop, budget_mb);
-    let budget_allowed = bc.allowed;
+    let bc = budget::check_budget(cols, rows, format_class, has_crop, settings.memory_budget_mb);
     let budget_check = Some(bc);
 
-    if !budget_allowed {
-        return EstimateResult {
-            tile_count,
-            cols,
-            rows,
-            estimated_size_mb,
-            allowed: false,
-            warning: Some("内存预算不足，请查看建议调整参数".to_string()),
-            budget_check,
-            raw_size_mb: raw_size_mb_opt,
-            size_note,
-            tile_download_mb,
-            estimated_output_mb,
-        };
-    }
-
+    // 预算仅用于预警，不决定任务是否允许下载。
     EstimateResult {
         tile_count,
         cols,
         rows,
         estimated_size_mb,
         allowed: true,
-        warning: None,
+        warning,
         budget_check,
         raw_size_mb: raw_size_mb_opt,
         size_note,
@@ -1503,9 +1491,8 @@ async fn execute_zoom_level(
             .unwrap_or(budget::DEFAULT_BUDGET_MB);
         let bc = budget::check_budget(cols, rows, format_class, has_crop, budget_mb);
         if !bc.allowed {
-            let err_msg = budget::format_budget_error(&bc);
-            task_log(app, tm, task_id, "ERROR", &err_msg);
-            return Err(err_msg);
+            let warning = budget::format_budget_warning(&bc);
+            task_log(app, tm, task_id, "WARN", &warning);
         }
 
         task_log(app, tm, task_id, "INFO", "使用常规内存拼接路径");
@@ -4511,4 +4498,113 @@ fn mime_to_format(mime: &str) -> &'static str {
     }
 }
 
+#[cfg(test)]
+mod memory_budget_tests {
+    use super::*;
 
+    fn estimate(bounds: Bounds, zoom: u8, format: &str) -> EstimateResult {
+        estimate_download_with_settings(
+            bounds, zoom, None, Some(format.to_string()), Some(false), None,
+            Some("google_satellite".to_string()), Some(false), Some("lzw".to_string()),
+            &AppSettings::default(),
+        )
+    }
+
+    #[test]
+    fn over_budget_raster_estimate_still_allows_download() {
+        // Below the tile-count warning threshold, but exceeds the maximum 16 GB budget.
+        let bounds = Bounds { north: 31.0, south: 30.0, east: 121.0, west: 120.0 };
+        for format in ["png", "jpeg"] {
+            let result = estimate(bounds, 17, format);
+            assert!(result.tile_count < 500_000);
+            let check = result.budget_check.unwrap();
+            assert!(!check.allowed);
+            assert!(check.estimated_peak_bytes > 16_384 * 1024 * 1024);
+            assert!(result.allowed, "{} must remain downloadable", format);
+            assert!(result.warning.is_none(), "budget warning is displayed separately");
+            assert!(!check.suggestions.is_empty());
+        }
+    }
+
+    #[test]
+    fn within_budget_estimate_has_no_memory_warning() {
+        let bounds = Bounds { north: 30.001, south: 30.0, east: 120.001, west: 120.0 };
+        let result = estimate(bounds, 15, "jpeg");
+        assert!(result.allowed);
+        assert!(result.budget_check.unwrap().allowed);
+        assert!(result.warning.is_none());
+    }
+
+    #[test]
+    fn large_tile_count_is_advisory_and_preserves_memory_warning() {
+        let bounds = Bounds { north: 32.0, south: 30.0, east: 122.0, west: 120.0 };
+        let result = estimate(bounds, 17, "jpeg");
+        assert!(result.tile_count > 500_000);
+        assert!(result.allowed);
+        assert!(result.warning.unwrap().contains("仍可继续下载"));
+        assert!(!result.budget_check.unwrap().allowed);
+    }
+
+    #[test]
+    fn reported_603018_tiles_across_two_zooms_are_allowed() {
+        // Reproduce the screenshot: z12 matrix 702 x 687, z11 + z12 = 603,018 tiles.
+        let nw = tile::tile_to_latlng(1000, 1000, 12);
+        let se = tile::tile_to_latlng(1701, 1686, 12);
+        let bounds = Bounds {
+            north: (nw.north + nw.south) / 2.0,
+            south: (se.north + se.south) / 2.0,
+            west: (nw.west + nw.east) / 2.0,
+            east: (se.west + se.east) / 2.0,
+        };
+        for format in ["geotiff", "png", "jpeg"] {
+            for levels in [None, Some(vec![11, 12])] {
+                let result = estimate_download_with_settings(
+                    bounds, 11, Some(12), Some(format.to_string()), Some(false), levels,
+                    Some("google_satellite".to_string()), Some(false), Some("lzw".to_string()),
+                    &AppSettings::default(),
+                );
+                assert_eq!(result.tile_count, 603_018);
+                assert_eq!((result.cols, result.rows), (702, 687));
+                assert!(result.allowed);
+                let warning = result.warning.unwrap();
+                assert!(warning.contains("603018"));
+                assert!(warning.contains("跨 z11~z12 共 2 级"));
+                assert!(warning.contains("仅作提示，仍可继续下载"));
+                assert!(!warning.contains("上限"));
+                assert!(result.budget_check.is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn custom_and_unlimited_thresholds_control_only_warnings() {
+        let bounds = Bounds { north: 31.0, south: 30.0, east: 121.0, west: 120.0 };
+        let run = |memory, tiles| {
+            let mut settings = AppSettings::default();
+            settings.memory_budget_mb = memory;
+            settings.tile_count_warning = tiles;
+            estimate_download_with_settings(
+                bounds, 17, None, Some("jpeg".to_string()), Some(false), None,
+                None, None, None, &settings,
+            )
+        };
+        let warned = run(1, 1);
+        assert!(warned.allowed);
+        assert!(warned.warning.is_some());
+        assert!(!warned.budget_check.unwrap().allowed);
+        let custom = run(98_304, 1_000_000);
+        assert!(custom.allowed);
+        assert!(custom.warning.is_none());
+        assert!(custom.budget_check.unwrap().allowed);
+        let unlimited = run(0, 0);
+        assert!(unlimited.allowed);
+        assert!(unlimited.warning.is_none());
+        assert!(unlimited.budget_check.unwrap().allowed);
+        let memory_only = run(1, 0);
+        assert!(memory_only.warning.is_none());
+        assert!(!memory_only.budget_check.unwrap().allowed);
+        let tiles_only = run(0, 1);
+        assert!(tiles_only.warning.is_some());
+        assert!(tiles_only.budget_check.unwrap().allowed);
+    }
+}

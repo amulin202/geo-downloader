@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { TFunction } from 'i18next'
 import { AlertTriangle, Code2, Database, ExternalLink, KeyRound, LayoutGrid, Loader2, ShieldAlert, SlidersHorizontal, Wifi, Wrench } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -44,6 +43,8 @@ import {
 } from './settings-api'
 import { TileCacheSection } from './tile-cache-section'
 import { LanguageSection } from './language-section'
+import { WarningThresholdInput } from './warning-threshold-input'
+import { createSettingsSchema } from './settings-schema'
 import { useImageryParamsStore } from '@/store/imagery-params-store'
 import type { AppSettings } from '@/types/api'
 
@@ -53,43 +54,6 @@ const FORMAT_OPTIONS = [
   { value: 'mbtiles', labelKey: 'settings.formats.mbtiles' },
   { value: 'gpkg', labelKey: 'settings.formats.gpkg' },
 ] as const
-
-const createSettingsSchema = (t: TFunction) => z
-  .object({
-    tianditu_token: z.string().trim(),
-    cesium_ion_token: z.string().trim(),
-    ai_assistant_enabled: z.boolean(),
-    ai_base_url: z.string().trim(),
-    ai_model: z.string().trim().min(1, t('settings.ai.modelRequired')),
-    deepseek_api_key: z.string().trim(),
-    proxy_enabled: z.boolean(),
-    proxy_url: z.string().trim(),
-    default_concurrency: z.number().int().min(1).max(100),
-    default_zoom: z.number().int().min(0).max(22),
-    default_format: z.enum(['geotiff', 'tiles', 'mbtiles', 'gpkg']),
-    memory_budget_mb: z.number().int().min(512).max(16384),
-    debug_mode: z.boolean(),
-    allow_invalid_certs: z.boolean(),
-    tile_cache_enabled: z.boolean(),
-    tile_cache_max_size_mb: z.number().int().min(0).max(1024 * 1024),
-    tile_cache_dir: z.string().trim(),
-    min_export_success_ratio: z.number().min(0).max(1),
-    export_buffer_mb: z.number().int().min(16).max(512),
-    empty_tile_probe_action: z.enum(['continue', 'ask', 'cancel']),
-  })
-  .superRefine((values, context) => {
-    if (!values.ai_assistant_enabled) return
-    try {
-      const baseUrl = new URL(values.ai_base_url)
-      if (!['http:', 'https:'].includes(baseUrl.protocol)) throw new Error()
-    } catch {
-      context.addIssue({
-        code: 'custom',
-        path: ['ai_base_url'],
-        message: t('settings.ai.invalidUrl'),
-      })
-    }
-  })
 
 type SettingsFormValues = z.infer<ReturnType<typeof createSettingsSchema>>
 
@@ -106,6 +70,7 @@ const DEFAULT_VALUES: SettingsFormValues = {
   default_zoom: 10,
   default_format: 'geotiff',
   memory_budget_mb: 2048,
+  tile_count_warning: 500000,
   debug_mode: false,
   allow_invalid_certs: false,
   tile_cache_enabled: true,
@@ -135,6 +100,7 @@ function fromAppSettings(s: AppSettings | undefined): SettingsFormValues {
     default_zoom: s.default_zoom ?? 10,
     default_format: safeFmt,
     memory_budget_mb: s.memory_budget_mb ?? 2048,
+    tile_count_warning: s.tile_count_warning ?? 500000,
     debug_mode: s.debug_mode ?? false,
     allow_invalid_certs: s.allow_invalid_certs ?? false,
     tile_cache_enabled: s.tile_cache_enabled ?? true,
@@ -160,6 +126,7 @@ function toAppSettings(values: SettingsFormValues, base: AppSettings | undefined
     default_zoom: values.default_zoom,
     default_format: values.default_format,
     memory_budget_mb: values.memory_budget_mb,
+    tile_count_warning: values.tile_count_warning,
     debug_mode: values.debug_mode,
     allow_invalid_certs: values.allow_invalid_certs,
     tile_cache_enabled: values.tile_cache_enabled,
@@ -199,11 +166,11 @@ export function SettingsPanel() {
     setValue,
     setError,
     control,
-    formState: { errors, isDirty },
+    formState: { errors, isDirty, dirtyFields },
   } = form
 
   useEffect(() => {
-    if (settingsQuery.data) reset(fromAppSettings(settingsQuery.data))
+    if (settingsQuery.data) reset(fromAppSettings(settingsQuery.data), { keepDirtyValues: true })
   }, [settingsQuery.data, reset])
 
   const proxyEnabled = useWatch({ control, name: 'proxy_enabled' })
@@ -217,6 +184,8 @@ export function SettingsPanel() {
   const minExportSuccessRatio = useWatch({ control, name: 'min_export_success_ratio' })
   const exportBufferMb = useWatch({ control, name: 'export_buffer_mb' })
   const emptyTileProbeAction = useWatch({ control, name: 'empty_tile_probe_action' })
+  const memoryBudgetMb = useWatch({ control, name: 'memory_budget_mb' })
+  const tileCountWarning = useWatch({ control, name: 'tile_count_warning' })
 
   const mutation = useMutation({
     mutationFn: async (values: SettingsFormValues) => {
@@ -229,13 +198,17 @@ export function SettingsPanel() {
         throw new Error(t('settings.ai.needKey'))
       }
       if (newApiKey) await setAssistantApiKey(newApiKey)
-      await saveSettings(toAppSettings(values, settingsQuery.data))
+      const submitted = toAppSettings(values, settingsQuery.data)
+      await saveSettings(submitted)
+      const persisted = await getSettings()
+      if ((persisted.tianditu_token ?? null) !== submitted.tianditu_token) {
+        throw new Error(t('settings.tokenVerifyFailed'))
+      }
+      return persisted
     },
-    onSuccess: (_d, values) => {
+    onSuccess: (persisted, values) => {
       toast.success(t('settings.saved'))
-      queryClient.setQueryData<AppSettings>(['settings'], (current) =>
-        toAppSettings(values, current),
-      )
+      queryClient.setQueryData<AppSettings>(['settings'], persisted)
       queryClient.invalidateQueries({ queryKey: ['settings'] })
       queryClient.invalidateQueries({ queryKey: ['assistant-secret-status'] })
       queryClient.invalidateQueries({ queryKey: ['tile-cache-stats'] })
@@ -286,7 +259,14 @@ export function SettingsPanel() {
     },
   })
 
-  const onSubmit = handleSubmit((values) => mutation.mutate(values))
+  const onSubmit = handleSubmit((values) => mutation.mutate(values), () => {
+    toast.error(t('settings.validationFailed'))
+  })
+  const tokenSaveStatus = dirtyFields.tianditu_token
+    ? t('settings.tokenUnsaved')
+    : settingsQuery.data?.tianditu_token?.trim()
+      ? t('settings.tokenSaved')
+      : t('settings.tokenShared')
 
   const requestAiAssistantChange = (enabled: boolean) => {
     if (!enabled) {
@@ -344,12 +324,22 @@ export function SettingsPanel() {
       >
         <div className="space-y-1.5">
           <Label htmlFor="tianditu_token">{t('settings.fields.tiandituToken')}</Label>
-          <Input
-            id="tianditu_token"
-            placeholder={t('common.optional')}
-            autoComplete="off"
-            {...register('tianditu_token')}
-          />
+          <div className="flex items-center gap-2">
+            <Input
+              id="tianditu_token"
+              placeholder={t('common.optional')}
+              autoComplete="off"
+              {...register('tianditu_token')}
+            />
+            <Button type="submit" className="shrink-0" disabled={!isDirty || mutation.isPending}>
+              {mutation.isPending && <Loader2 className="mr-1 size-3.5 animate-spin" />}
+              {t('settings.saveSettings')}
+            </Button>
+          </div>
+          <p role="status" className={dirtyFields.tianditu_token ? 'text-xs text-amber-700 dark:text-amber-300' : 'text-xs text-muted-foreground'}>
+            {mutation.isPending ? t('settings.saving') : tokenSaveStatus}
+          </p>
+          <p className="text-xs text-muted-foreground">{t('settings.tokenSaveHint')}</p>
           <p className="text-xs leading-5 text-muted-foreground">
             {t('settings.fields.tiandituTokenHint')}{' '}
             <a
@@ -476,14 +466,14 @@ export function SettingsPanel() {
             </p>
           </div>
           <div className="space-y-1.5 sm:col-span-2">
-            <Label htmlFor="memory_budget_mb">{t('settings.fields.memory')}</Label>
-            <Input
+            <WarningThresholdInput
               id="memory_budget_mb"
-              type="number"
-              min={512}
-              max={16384}
-              step={256}
-              {...register('memory_budget_mb', { valueAsNumber: true })}
+              label={t('settings.fields.memory')}
+              hint={t('settings.memoryHint')}
+              value={memoryBudgetMb}
+              defaultValue={2048}
+              onChange={(value) => setValue('memory_budget_mb', value, { shouldDirty: true, shouldValidate: true })}
+              error={errors.memory_budget_mb?.message}
             />
             {memoryQuery.data && (
               <p className="text-xs text-muted-foreground">
@@ -496,6 +486,14 @@ export function SettingsPanel() {
                   : ''}
               </p>
             )}
+          </div>
+          <div className="sm:col-span-2">
+            <WarningThresholdInput id="tile_count_warning"
+              label={t('settings.fields.tileCountWarning')}
+              hint={t('settings.tileCountWarningHint')}
+              value={tileCountWarning} defaultValue={500000}
+              onChange={(value) => setValue('tile_count_warning', value, { shouldDirty: true, shouldValidate: true })}
+              error={errors.tile_count_warning?.message} />
           </div>
           {/* Issue #31：自动导出最低成功率阈值 */}
           <div className="space-y-1.5 sm:col-span-2">
@@ -698,6 +696,14 @@ export function SettingsPanel() {
       <TelemetrySettingsSection />
 
       <div className="sticky bottom-0 -mx-3 border-t bg-background/95 px-3 py-2 backdrop-blur">
+        {Object.keys(errors).length > 0 && (
+          <p role="alert" className="mb-2 text-xs text-destructive">{t('settings.validationFailed')}</p>
+        )}
+        {mutation.isError && (
+          <p role="alert" className="mb-2 text-xs text-destructive">
+            {t('settings.saveError', { message: mutation.error instanceof Error ? mutation.error.message : String(mutation.error) })}
+          </p>
+        )}
         <Button type="submit" className="w-full" disabled={!isDirty || mutation.isPending}>
           {mutation.isPending && <Loader2 className="mr-1 size-3.5 animate-spin" />}
           {t('common.save')}

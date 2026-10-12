@@ -23,6 +23,7 @@ import {
 
 import { createDownloadTask, estimateDownload, probeTile } from '@/features/download/download-api'
 import { buildSelectionCropPolygon } from '@/features/download/crop-utils'
+import { MemoryBudgetWarning } from '@/features/download/memory-budget-warning'
 import {
   BuildPyramidToggle,
   GeoTiffSidecarToggle,
@@ -659,12 +660,13 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
   const showGcj02 = !isDemMode && GCJ02_SOURCES.has(source)
   const areaKm2 = bounds ? estimateAreaKm2(bounds) : null
 
-  // 自动估算：bounds / zoom / format 等参数变化后 400ms 防抖触发
+  // 参数或已保存的预警阈值变化后，400ms 防抖重新估算。
   useEffect(() => {
     if (!bounds) {
       setEstimate(null)
       return
     }
+    let cancelled = false
     const handle = window.setTimeout(() => {
       const zMax = zoomMax > zoom ? zoomMax : null
       estimateDownload(bounds, zoom, format, effectiveCropToShape, zMax, sortedLevels, {
@@ -672,14 +674,20 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
         buildPyramid: format === 'geotiff' ? buildPyramid : false,
         compression: format === 'geotiff' ? compression : 'none',
       })
-        .then((data) => setEstimate(data))
+        .then((data) => {
+          if (!cancelled) setEstimate(data)
+        })
         .catch(() => {
           /* 自动估算失败不打扰用户 */
         })
     }, 400)
-    return () => window.clearTimeout(handle)
+    return () => {
+      cancelled = true
+      window.clearTimeout(handle)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bounds, zoom, zoomMax, sortedLevels, format, cropToShape, polygon, source, compression, buildPyramid])
+  }, [bounds, zoom, zoomMax, sortedLevels, format, cropToShape, polygon, source, compression, buildPyramid,
+    settingsQuery.data?.memory_budget_mb, settingsQuery.data?.tile_count_warning])
 
   // 注意：此处不再用 useEffect[source, mode] 写 store，因为 useWatch 是异步更新
   // + StrictMode 双挂载，可能出现“上一个 mode 的 source 被临时写入新 mode”的错误。
@@ -990,12 +998,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
                     <span>{estimate.warning}</span>
                   </div>
                 )}
-                {estimate.budget_check && estimate.budget_check.allowed === false && (
-                  <div className="mt-1 flex gap-1.5 rounded border border-destructive/40 bg-destructive/10 p-1.5 text-destructive">
-                    <AlertTriangle className="size-3.5 shrink-0" />
-                    <span>{estimate.budget_check.message ?? t('download.estimate.insufficientMemory')}</span>
-                  </div>
-                )}
+                <MemoryBudgetWarning budgetCheck={estimate.budget_check} />
               </>
             ) : (
               <span className="text-muted-foreground">{t('download.estimate.loading')}</span>

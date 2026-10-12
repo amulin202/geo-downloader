@@ -61,8 +61,10 @@ export interface AppSettings {
   ai_model?: string
   /** 调试模式：保留临时瓦片目录 */
   debug_mode?: boolean
-  /** 内存预算 (MB)，512 - 16384 */
+  /** 内存预警阈值 (MB)，0 = 不限，仅提示 */
   memory_budget_mb?: number
+  /** 跨所选缩放级别的瓦片总数预警阈值，0 = 不限，默认 500000 */
+  tile_count_warning?: number
   /** 允许无效 HTTPS 证书（默认 false，安全风险） */
   allow_invalid_certs?: boolean
   /** 启用瓦片缓存（默认 true） */
@@ -156,10 +158,11 @@ export interface DownloadRequest {
 }
 
 export interface BudgetCheckResult {
+  /** Whether the estimate is within budget; false is advisory only. */
   allowed: boolean
-  message?: string
-  estimated_mb?: number
-  budget_mb?: number
+  estimated_peak_bytes: number
+  budget_bytes: number
+  suggestions?: string[]
   [key: string]: unknown
 }
 
