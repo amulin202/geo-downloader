@@ -19,6 +19,7 @@ use rand::seq::SliceRandom;
 use futures::stream::{self, StreamExt};
 use tokio_util::sync::CancellationToken;
 use crate::{tile_payload, tile_policy};
+use crate::tianditu_tokens::{self, TiandituTokens};
 
 #[derive(Default)]
 struct RateLimitGate(std::sync::Mutex<Option<tokio::time::Instant>>);
@@ -41,7 +42,7 @@ impl RateLimitGate {
     }
 }
 
-fn retry_after(headers: &reqwest::header::HeaderMap, attempt: u32) -> Duration {
+pub(crate) fn retry_after(headers: &reqwest::header::HeaderMap, attempt: u32) -> Duration {
     let seconds = headers.get(reqwest::header::RETRY_AFTER)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<u64>().ok().or_else(|| {
@@ -109,6 +110,7 @@ pub struct TileDownloader {
     retry_times: u32,
     preview_only: bool,
     rate_limit: Arc<RateLimitGate>,
+    tianditu_tokens: Option<Arc<TiandituTokens>>,
 }
 
 impl TileDownloader {
@@ -116,7 +118,7 @@ impl TileDownloader {
         if url.contains("tianditu.gov.cn") {
             let reason = match status.as_u16() {
                 401 => "Token 无效或未通过认证",
-                418 => "缺少 Token 或 Token 无效",
+                418 => "请求被服务防护拦截或 Token 异常",
                 403 => "Token 无权限、来源受限或公开 Key 已失效",
                 429 => "Token 请求额度不足或服务正在限流",
                 _ => return format!("天地图请求失败：HTTP {}", status.as_u16()),
@@ -178,7 +180,15 @@ impl TileDownloader {
             retry_times: config::RETRY_TIMES,
             preview_only,
             rate_limit: Arc::new(RateLimitGate::default()),
+            tianditu_tokens: None,
         })
+    }
+
+    pub fn with_tianditu_tokens(mut self, tokens: Arc<TiandituTokens>) -> Self {
+        if tianditu_tokens::is_tianditu_url(&self.source.url) {
+            self.tianditu_tokens = Some(tokens);
+        }
+        self
     }
 
     /// 生成瓦片 URL
@@ -310,17 +320,23 @@ impl TileDownloader {
         retry_times: u32,
         retrying_count: Option<&AtomicU32>,
         rate_limit: &RateLimitGate,
+        tokens: Option<&TiandituTokens>,
     ) -> Result<(), String> {
         tile_policy::ensure_offline_allowed(url)?;
-        let mut last_error = String::new();
+        let tokens = tokens.filter(|_| tianditu_tokens::is_tianditu_url(url));
+        let mut last_error: String;
         if let Some(parent) = file_path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
                 .map_err(|e| format!("创建瓦片目录失败: {}", e))?;
         }
 
-        for attempt in 0..=retry_times {
+        let mut attempt = 0;
+        loop {
             rate_limit.wait().await;
+            let selected = tokens.map(TiandituTokens::current).transpose()?;
+            let request_url = selected.as_ref().map(|selected| tianditu_tokens::token_url(url, &selected.token));
+            let url = request_url.as_deref().unwrap_or(url);
             let req_fut = async {
                 match client.get(url).headers(headers.clone()).send().await {
                     Ok(resp) => {
@@ -339,6 +355,15 @@ impl TileDownloader {
                                 }
                                 Err(e) => Err((e, false)),
                             }
+                        } else if tokens.is_some() && matches!(status.as_u16(), 401 | 403 | 429) {
+                            if status.as_u16() == 429 {
+                                let delay = retry_after(resp.headers(), attempt);
+                                if delay > Duration::from_secs(60) {
+                                    return Err((format!("TILE_RATE_LIMITED: {}；请稍后重试", Self::http_error_message(url, status)), false));
+                                }
+                                rate_limit.defer(delay);
+                            }
+                            Err((format!("TIANDITU_TOKEN_REJECTED: HTTP {}", status.as_u16()), false))
                         } else if status.as_u16() == 404 {
                             // 瓦片不存在（该区域/缩放级别无数据），跳过不重试
                             // 清除可能残存的旧文件，避免断点续传误判
@@ -366,6 +391,11 @@ impl TileDownloader {
             match tokio::time::timeout(Duration::from_secs(8), req_fut).await {
                 Ok(Ok(())) => return Ok(()),
                 Ok(Err((e, rate_limited))) => {
+                    if let Some(reason) = e.strip_prefix("TIANDITU_TOKEN_REJECTED: ") {
+                        tokens.unwrap().reject(selected.as_ref().unwrap(), reason)?;
+                        attempt = 0;
+                        continue;
+                    }
                     if tile_policy::is_terminal_download_error(&e) { return Err(e); }
                     last_error = e;
                     if attempt < retry_times {
@@ -392,6 +422,8 @@ impl TileDownloader {
                     }
                 }
             }
+            if attempt >= retry_times { break; }
+            attempt += 1;
         }
         Err(last_error)
     }
@@ -594,7 +626,7 @@ impl TileDownloader {
                 }
 
                 // 3) 网络下载
-                let result = Self::download_one_tile(&client, &url, &headers, &file_path, retry_times, Some(&rc), &self.rate_limit).await;
+                let result = Self::download_one_tile(&client, &url, &headers, &file_path, retry_times, Some(&rc), &self.rate_limit, self.tianditu_tokens.as_deref()).await;
                 let final_result: Result<MergerTileSource, String> = result.and_then(|_| {
                     if file_path.exists() {
                         Ok(MergerTileSource::from_path(file_path.clone()))
@@ -807,7 +839,7 @@ impl TileDownloader {
                     }
 
                     // 重试轮只给 1 次重试机会
-                    let result = Self::download_one_tile(&client, &url, &headers, &file_path, 1, None, &self.rate_limit).await;
+                    let result = Self::download_one_tile(&client, &url, &headers, &file_path, 1, None, &self.rate_limit, self.tianditu_tokens.as_deref()).await;
                     let final_result: Result<MergerTileSource, String> = result.and_then(|_| {
                         if file_path.exists() {
                             Ok(MergerTileSource::from_path(file_path.clone()))
@@ -1019,7 +1051,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("tile.png");
             let client = Client::builder().no_proxy().build().unwrap();
-            let error = TileDownloader::download_one_tile(&client, &url, &Default::default(), &path, 3, None, &RateLimitGate::default()).await.unwrap_err();
+            let error = TileDownloader::download_one_tile(&client, &url, &Default::default(), &path, 3, None, &RateLimitGate::default(), None).await.unwrap_err();
             server.abort();
             assert!(error.starts_with(expected), "{error}");
             assert_eq!(count.load(Ordering::SeqCst), 1);
@@ -1034,11 +1066,97 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("tile.png");
             let client = Client::builder().no_proxy().build().unwrap();
-            let error = TileDownloader::download_one_tile(&client, &url, &Default::default(), &path, 1, None, &RateLimitGate::default()).await.unwrap_err();
+            let error = TileDownloader::download_one_tile(&client, &url, &Default::default(), &path, 1, None, &RateLimitGate::default(), None).await.unwrap_err();
             server.abort();
             assert!(error.starts_with("TILE_RATE_LIMITED:"), "{error}");
             assert_eq!(count.load(Ordering::SeqCst), expected_requests);
             assert!(!path.exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn tianditu_failover_retries_the_same_tile_and_shares_active_token_across_layers() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(2, 2).write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let bytes = png.into_inner();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let observed = requests.clone();
+        let body = bytes.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut request = [0; 4096];
+                let count = socket.read(&mut request).await.unwrap();
+                let request = String::from_utf8_lossy(&request[..count]);
+                let path = request.split_whitespace().nth(1).unwrap();
+                observed.lock().unwrap().push(path.to_owned());
+                let status = if path.contains("tk=quota") { "429 Too Many Requests" }
+                    else if path.contains("tk=invalid") { "401 Unauthorized" }
+                    else if path.contains("tk=denied") { "403 Forbidden" }
+                    else { "200 OK" };
+                socket.write_all(&wire(status, "Retry-After: 0\r\nContent-Type: image/png\r\n", &body)).await.unwrap();
+                socket.shutdown().await.unwrap();
+            }
+        });
+        let url = format!("http://t0.tianditu.gov.cn:{}/tile?x=2&y=3&z=4&tk=stale&hl=en", address.port());
+        let client = Client::builder().no_proxy().resolve("t0.tianditu.gov.cn", address).build().unwrap();
+        let pool = TiandituTokens::new(vec!["quota".into(), "invalid".into(), "denied".into(), "valid".into()], Arc::new(|_| {}));
+        let gate = RateLimitGate::default();
+        let dir = tempfile::tempdir().unwrap();
+        for layer in ["main", "annotation"] {
+            let path = dir.path().join(format!("{layer}.png"));
+            TileDownloader::download_one_tile(&client, &url, &Default::default(), &path, 0, None, &gate, Some(&pool)).await.unwrap();
+            assert_eq!(std::fs::read(path).unwrap(), bytes);
+        }
+        server.abort();
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 5);
+        for (request, token) in requests.iter().zip(["quota", "invalid", "denied", "valid", "valid"]) {
+            assert!(request.contains(&format!("tk={token}")), "{request}");
+            assert!(request.contains("x=2") && request.contains("y=3") && request.contains("z=4") && request.contains("hl=en"));
+            assert!(!request.contains("stale"));
+        }
+    }
+
+    #[tokio::test]
+    async fn all_tokens_exhausted_stop_without_bad_files_and_other_hosts_never_receive_tokens() {
+        for tianditu in [true, false] {
+            let (url, count, server) = mock_tile_server(wire("429 Too Many Requests", "Retry-After: 0\r\n", b"quota exhausted")).await;
+            let address = reqwest::Url::parse(&url).unwrap().socket_addrs(|| None).unwrap()[0];
+            let url = if tianditu { url.replace("127.0.0.1", "t0.tianditu.gov.cn") } else { url };
+            let client = Client::builder().no_proxy().resolve("t0.tianditu.gov.cn", address).build().unwrap();
+            let pool = TiandituTokens::new(vec!["private-a".into(), "private-b".into()], Arc::new(|_| {}));
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("tile.png");
+            let error = TileDownloader::download_one_tile(&client, &url, &Default::default(), &path, 0, None, &RateLimitGate::default(), Some(&pool)).await.unwrap_err();
+            server.abort();
+            assert!(error.starts_with(if tianditu { "TILE_TOKENS_EXHAUSTED:" } else { "TILE_RATE_LIMITED:" }), "{error}");
+            assert!(tile_policy::is_terminal_download_error(&error));
+            assert!(!error.contains("private-"));
+            assert_eq!(count.load(Ordering::SeqCst), if tianditu { 2 } else { 1 });
+            assert!(!path.exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_waf_and_long_retry_after_do_not_rotate_tokens() {
+        for (status, headers, prefix) in [
+            ("418 I'm a teapot", "", "天地图"),
+            ("429 Too Many Requests", "Retry-After: 120\r\n", "TILE_RATE_LIMITED:"),
+        ] {
+            let (url, count, server) = mock_tile_server(wire(status, headers, b"CloudWAF")).await;
+            let address = reqwest::Url::parse(&url).unwrap().socket_addrs(|| None).unwrap()[0];
+            let url = url.replace("127.0.0.1", "t0.tianditu.gov.cn");
+            let client = Client::builder().no_proxy().resolve("t0.tianditu.gov.cn", address).build().unwrap();
+            let pool = TiandituTokens::new(vec!["a".into(), "b".into()], Arc::new(|_| {}));
+            let dir = tempfile::tempdir().unwrap();
+            let error = TileDownloader::download_one_tile(&client, &url, &Default::default(), &dir.path().join("tile.png"), 0, None, &RateLimitGate::default(), Some(&pool)).await.unwrap_err();
+            server.abort();
+            assert!(error.starts_with(prefix), "{error}");
+            assert_eq!(count.load(Ordering::SeqCst), 1);
+            assert_eq!(pool.current().unwrap().token, "a");
         }
     }
 
@@ -1055,7 +1173,7 @@ mod tests {
             .redirect(tile_policy::offline_redirect_policy()).build().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("tile.png");
-        let error = TileDownloader::download_one_tile(&client, &url, &Default::default(), &path, 3, None, &RateLimitGate::default()).await.unwrap_err();
+        let error = TileDownloader::download_one_tile(&client, &url, &Default::default(), &path, 3, None, &RateLimitGate::default(), None).await.unwrap_err();
         server.abort();
         target_server.abort();
         assert!(error.starts_with("TILE_REDIRECT_DENIED:"), "{error}");
@@ -1073,7 +1191,7 @@ mod tests {
             let client = Client::builder().no_proxy().build().unwrap();
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("tile.png");
-            TileDownloader::download_one_tile(&client, &url, &Default::default(), &path, 0, None, &RateLimitGate::default()).await.unwrap();
+            TileDownloader::download_one_tile(&client, &url, &Default::default(), &path, 0, None, &RateLimitGate::default(), None).await.unwrap();
             server.abort();
             assert_eq!(std::fs::read(path).unwrap(), bytes);
             assert_eq!(count.load(Ordering::SeqCst), 1);
@@ -1212,10 +1330,10 @@ mod tests {
         assert!(limited.contains("额度不足"));
         assert!(limited.contains("cloudcenter.tianditu.gov.cn"));
 
-        let missing = TileDownloader::http_error_message(
+        let blocked = TileDownloader::http_error_message(
             &url,
             reqwest::StatusCode::IM_A_TEAPOT,
         );
-        assert!(missing.contains("缺少 Token"));
+        assert!(blocked.contains("服务防护"));
     }
 }

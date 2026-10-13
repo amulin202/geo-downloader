@@ -4,6 +4,7 @@ import { warningThresholdSchema } from './warning-threshold-schema.ts'
 
 export const createSettingsSchema = (t: TFunction) => z.object({
   tianditu_token: z.string().trim(),
+  tianditu_backup_tokens: z.string().trim(),
   cesium_ion_token: z.string().trim(),
   ai_assistant_enabled: z.boolean(),
   ai_base_url: z.string().trim(),

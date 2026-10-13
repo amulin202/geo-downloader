@@ -2,11 +2,13 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { TFunction } from 'i18next'
 import { createSettingsSchema } from './settings-schema.ts'
+import { parseTiandituBackups, primaryTiandituToken } from './tianditu-tokens.ts'
 
 const t = ((key: string) => key) as TFunction
 const schema = createSettingsSchema(t)
 const settings = {
   tianditu_token: '  0123456789abcdef0123456789abcdef  ', cesium_ion_token: '',
+  tianditu_backup_tokens: '',
   ai_assistant_enabled: false, ai_base_url: '', ai_model: '', deepseek_api_key: '',
   proxy_enabled: false, proxy_url: '', default_concurrency: 30, default_zoom: 15,
   default_format: 'geotiff', memory_budget_mb: 0, tile_count_warning: 0,
@@ -34,4 +36,13 @@ test('unrelated visible invalid settings are still rejected', () => {
   const result = schema.safeParse({...settings, default_concurrency: 0})
   assert.equal(result.success, false)
   if (!result.success) assert.equal(result.error.issues[0].path[0], 'default_concurrency')
+})
+
+test('ordered backup tokens omit empty lines and duplicates including the primary', () => {
+  assert.deepEqual(parseTiandituBackups(' primary\n backup-a\r\n\nbackup-b,backup-a；backup-c ', ' primary '), ['backup-a', 'backup-b', 'backup-c'])
+  assert.deepEqual(parseTiandituBackups(' \r\n '), [])
+  assert.deepEqual(parseTiandituBackups('only-backup'), ['only-backup'])
+  assert.equal(primaryTiandituToken({tianditu_token:' primary ', tianditu_backup_tokens:['backup']}), 'primary')
+  assert.equal(primaryTiandituToken({tianditu_token:' ', tianditu_backup_tokens:[' ', ' backup ']}), 'backup')
+  assert.equal(primaryTiandituToken({}), null)
 })

@@ -44,6 +44,7 @@ import {
 import { TileCacheSection } from './tile-cache-section'
 import { LanguageSection } from './language-section'
 import { WarningThresholdInput } from './warning-threshold-input'
+import { parseTiandituBackups } from './tianditu-tokens'
 import { createSettingsSchema } from './settings-schema'
 import { useImageryParamsStore } from '@/store/imagery-params-store'
 import type { AppSettings } from '@/types/api'
@@ -59,6 +60,7 @@ type SettingsFormValues = z.infer<ReturnType<typeof createSettingsSchema>>
 
 const DEFAULT_VALUES: SettingsFormValues = {
   tianditu_token: '',
+  tianditu_backup_tokens: '',
   cesium_ion_token: '',
   ai_assistant_enabled: false,
   ai_base_url: 'https://api.deepseek.com/v1',
@@ -89,6 +91,7 @@ function fromAppSettings(s: AppSettings | undefined): SettingsFormValues {
     : 'geotiff'
   return {
     tianditu_token: s.tianditu_token ?? '',
+    tianditu_backup_tokens: (s.tianditu_backup_tokens ?? []).join('\n'),
     cesium_ion_token: s.cesium_ion_token ?? '',
     ai_assistant_enabled: s.ai_assistant_enabled ?? false,
     ai_base_url: s.ai_base_url ?? 'https://api.deepseek.com/v1',
@@ -116,6 +119,7 @@ function toAppSettings(values: SettingsFormValues, base: AppSettings | undefined
   return {
     ...(base ?? {}),
     tianditu_token: values.tianditu_token.trim() || null,
+    tianditu_backup_tokens: parseTiandituBackups(values.tianditu_backup_tokens, values.tianditu_token),
     cesium_ion_token: values.cesium_ion_token.trim() || null,
     ai_assistant_enabled: values.ai_assistant_enabled,
     ai_base_url: values.ai_base_url.trim() || 'https://api.deepseek.com/v1',
@@ -201,7 +205,8 @@ export function SettingsPanel() {
       const submitted = toAppSettings(values, settingsQuery.data)
       await saveSettings(submitted)
       const persisted = await getSettings()
-      if ((persisted.tianditu_token ?? null) !== submitted.tianditu_token) {
+      if ((persisted.tianditu_token ?? null) !== submitted.tianditu_token
+        || JSON.stringify(persisted.tianditu_backup_tokens ?? []) !== JSON.stringify(submitted.tianditu_backup_tokens)) {
         throw new Error(t('settings.tokenVerifyFailed'))
       }
       return persisted
@@ -230,7 +235,7 @@ export function SettingsPanel() {
       if (values.deepseek_api_key.trim()) {
         void trackTelemetry('assistant_setting_changed', { action: 'key_saved' })
       }
-      reset({ ...values, deepseek_api_key: '' })
+      reset({ ...fromAppSettings(persisted), deepseek_api_key: '' })
     },
     onError: (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err)
@@ -262,10 +267,13 @@ export function SettingsPanel() {
   const onSubmit = handleSubmit((values) => mutation.mutate(values), () => {
     toast.error(t('settings.validationFailed'))
   })
-  const tokenSaveStatus = dirtyFields.tianditu_token
+  const tokensDirty = dirtyFields.tianditu_token || dirtyFields.tianditu_backup_tokens
+  const savedTokenCount = (settingsQuery.data?.tianditu_token?.trim() ? 1 : 0)
+    + (settingsQuery.data?.tianditu_backup_tokens?.length ?? 0)
+  const tokenSaveStatus = tokensDirty
     ? t('settings.tokenUnsaved')
-    : settingsQuery.data?.tianditu_token?.trim()
-      ? t('settings.tokenSaved')
+    : savedTokenCount
+      ? t('settings.tokenSaved', { count: savedTokenCount })
       : t('settings.tokenShared')
 
   const requestAiAssistantChange = (enabled: boolean) => {
@@ -336,7 +344,18 @@ export function SettingsPanel() {
               {t('settings.saveSettings')}
             </Button>
           </div>
-          <p role="status" className={dirtyFields.tianditu_token ? 'text-xs text-amber-700 dark:text-amber-300' : 'text-xs text-muted-foreground'}>
+          <div className="space-y-1.5">
+            <Label htmlFor="tianditu_backup_tokens">{t('settings.fields.tiandituBackups')}</Label>
+            <textarea
+              id="tianditu_backup_tokens" rows={3} autoComplete="off" spellCheck={false}
+              aria-describedby="tianditu-backups-hint"
+              className="flex w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+              placeholder={t('settings.fields.tiandituBackupsPlaceholder')}
+              {...register('tianditu_backup_tokens')}
+            />
+            <p id="tianditu-backups-hint" className="text-xs leading-5 text-muted-foreground">{t('settings.fields.tiandituBackupsHint')}</p>
+          </div>
+          <p role="status" className={tokensDirty ? 'text-xs text-amber-700 dark:text-amber-300' : 'text-xs text-muted-foreground'}>
             {mutation.isPending ? t('settings.saving') : tokenSaveStatus}
           </p>
           <p className="text-xs text-muted-foreground">{t('settings.tokenSaveHint')}</p>

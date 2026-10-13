@@ -52,6 +52,7 @@ pub fn is_terminal_download_error(error: &str) -> bool {
         "TILE_ACCESS_DENIED:",
         "TILE_REDIRECT_DENIED:",
         "TILE_RATE_LIMITED:",
+        "TILE_TOKENS_EXHAUSTED:",
         "INVALID_TILE:",
         "TILE_TOO_LARGE:",
         "TILE_STORAGE_FAILED:",

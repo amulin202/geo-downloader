@@ -47,6 +47,9 @@ pub struct AppSettings {
     /// 天地图 Token
     #[serde(default)]
     pub tianditu_token: Option<String>,
+    /// Ordered fallback tokens; old single-token settings continue to work.
+    #[serde(default)]
+    pub tianditu_backup_tokens: Vec<String>,
     /// 是否启用代理
     #[serde(default = "default_proxy_enabled")]
     pub proxy_enabled: bool,
@@ -154,6 +157,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             tianditu_token: None,
+            tianditu_backup_tokens: Vec::new(),
             proxy_enabled: default_proxy_enabled(),
             proxy_url: default_proxy_url(),
             default_concurrency: default_concurrency(),
@@ -284,9 +288,11 @@ mod tests {
         settings.tile_count_warning = 0;
         for token in [Some("0123456789abcdef0123456789abcdef".to_string()), None] {
             settings.tianditu_token = token.clone();
+            settings.tianditu_backup_tokens = if token.is_some() { vec!["backup-one".into(), "backup-two".into()] } else { Vec::new() };
             super::SettingsManager::from_file_path(path.clone()).save(&settings).unwrap();
             let loaded = super::SettingsManager::from_file_path(path.clone()).get().unwrap();
             assert_eq!(loaded.tianditu_token, token);
+            assert_eq!(loaded.tianditu_backup_tokens, settings.tianditu_backup_tokens);
             assert_eq!(loaded.tile_count_warning, 0);
             assert_eq!(loaded.default_concurrency, settings.default_concurrency);
         }

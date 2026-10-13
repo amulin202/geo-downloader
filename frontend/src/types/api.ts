@@ -35,6 +35,7 @@ export interface TileSource {
 export interface AppSettings {
   /** 天地图 Token */
   tianditu_token?: Nullable<string>
+  tianditu_backup_tokens?: string[]
   /** 是否启用代理 */
   proxy_enabled?: boolean
   /** 代理地址 */

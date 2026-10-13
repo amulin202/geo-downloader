@@ -1,3 +1,4 @@
+import { primaryTiandituToken } from '@/features/settings/tianditu-tokens'
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Loader2, MapPin, Search, Upload, X } from 'lucide-react'
@@ -220,7 +221,7 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
     if (!q) return
     setSearching(true)
     try {
-      const token = settingsQuery.data?.tianditu_token ?? null
+      const token = primaryTiandituToken(settingsQuery.data)
       const results = await geocodeSearch(q, token)
       setSearchResults(results)
       if (results.length === 0) toast.info(t('region.toast.noSearchResults'))

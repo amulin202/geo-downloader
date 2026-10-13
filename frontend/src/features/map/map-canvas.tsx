@@ -1,3 +1,5 @@
+import { addMeasurementResult, type MeasurementLabel } from './measurement-labels'
+import { primaryTiandituToken } from '@/features/settings/tianditu-tokens'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import L from 'leaflet'
@@ -250,41 +252,27 @@ function measurePathDistance(points: L.LatLng[], closePath = false) {
   return distance
 }
 
-function measurementLabelIcon(primary: string, secondary?: string, compact = false) {
-  return L.divIcon({
-    className: 'geod-measure-label-host',
-    html: `<div class="geod-measure-label${compact ? ' is-compact' : ''}"><strong>${primary}</strong>${secondary ? `<span>${secondary}</span>` : ''}</div>`,
-    iconSize: undefined,
-  })
-}
-
 function addDistanceMeasurement(
   group: L.FeatureGroup,
   layer: L.Polyline,
   points: L.LatLng[],
   t: TFunction,
 ) {
-  group.addLayer(layer)
+  const labels: MeasurementLabel[] = []
   for (let index = 1; index < points.length; index += 1) {
     const start = points[index - 1]
     const end = points[index]
-    const midpoint = L.latLng((start.lat + end.lat) / 2, (start.lng + end.lng) / 2)
-    group.addLayer(
-      L.marker(midpoint, {
-        icon: measurementLabelIcon(formatMeasureDistance(start.distanceTo(end)), undefined, true),
-        interactive: false,
-        keyboard: false,
-      }),
-    )
+    labels.push({
+      position: L.latLng((start.lat + end.lat) / 2, (start.lng + end.lng) / 2),
+      primary: formatMeasureDistance(start.distanceTo(end)),
+      compact: true,
+    })
   }
-  const total = measurePathDistance(points)
-  group.addLayer(
-    L.marker(points[points.length - 1], {
-      icon: measurementLabelIcon(t('map.totalLength', { value: formatMeasureDistance(total) })),
-      interactive: false,
-      keyboard: false,
-    }),
-  )
+  labels.push({
+    position: points[points.length - 1],
+    primary: t('map.totalLength', { value: formatMeasureDistance(measurePathDistance(points)) }),
+  })
+  addMeasurementResult(group, layer, labels, t('map.measureResultHint'))
 }
 
 function addAreaMeasurement(
@@ -293,21 +281,14 @@ function addAreaMeasurement(
   points: L.LatLng[],
   t: TFunction,
 ) {
-  group.addLayer(layer)
-  // leaflet-draw ships GeometryUtil, which calculates geodesic polygon area in square meters.
+  // leaflet-draw calculates geodesic polygon area in square meters.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const area = (L as any).GeometryUtil.geodesicArea(points) as number
-  const perimeter = measurePathDistance(points, true)
-  group.addLayer(
-    L.marker(layer.getBounds().getCenter(), {
-      icon: measurementLabelIcon(
-        t('map.area', { value: formatMeasureArea(area) }),
-        t('map.perimeter', { value: formatMeasureDistance(perimeter) }),
-      ),
-      interactive: false,
-      keyboard: false,
-    }),
-  )
+  addMeasurementResult(group, layer, [{
+    position: layer.getBounds().getCenter(),
+    primary: t('map.area', { value: formatMeasureArea(area) }),
+    secondary: t('map.perimeter', { value: formatMeasureDistance(measurePathDistance(points, true)) }),
+  }], t('map.measureResultHint'))
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -531,7 +512,7 @@ export function MapCanvas() {
   const setWaybackPreviewId = useWaybackStore((s) => s.setPreviewVersionId)
 
   const settingsQuery = useQuery({ queryKey: ['settings'], queryFn: getSettings })
-  const tdtToken = settingsQuery.data?.tianditu_token ?? null
+  const tdtToken = primaryTiandituToken(settingsQuery.data)
   const proxyUrl = useMemo(() => {
     const s = settingsQuery.data
     if (!s?.proxy_enabled) return null

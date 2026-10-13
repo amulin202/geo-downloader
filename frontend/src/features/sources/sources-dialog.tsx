@@ -1,3 +1,4 @@
+import { primaryTiandituToken } from '@/features/settings/tianditu-tokens'
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -632,7 +633,7 @@ export function SourcesDialog() {
     queryFn: getSettings,
     enabled: open,
   })
-  const tiandituToken = settingsQuery.data?.tianditu_token ?? null
+  const tiandituToken = primaryTiandituToken(settingsQuery.data)
   const builtinsQuery = useQuery({
     queryKey: ['builtin-sources', tiandituToken],
     queryFn: () => getBuiltinSourcesRaw(tiandituToken),

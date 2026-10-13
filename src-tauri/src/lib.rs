@@ -2,6 +2,7 @@
 pub mod config;
 pub mod tile;
 pub mod downloader;
+pub mod tianditu_tokens;
 pub mod merger;
 pub mod overlay;
 pub mod tile_crop;

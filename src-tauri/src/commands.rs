@@ -924,6 +924,7 @@ async fn execute_zoom_level(
     total_tiles: u32,
     // Issue #31：本级别成功率低于此阈值时跳过导出，停留为待用户决策 Paused
     min_export_success_ratio: f32,
+    tianditu_tokens: &Arc<crate::tianditu_tokens::TiandituTokens>,
 ) -> Result<ZoomLevelResult, String> {
     let event_name = format!("task-progress-{}", task_id);
     let level_start = std::time::Instant::now();
@@ -991,7 +992,8 @@ async fn execute_zoom_level(
     task_log(app, tm, task_id, "INFO", &format!("瓦片临时目录: {}", temp_dir.display()));
     
     // 创建下载器
-    let downloader = TileDownloader::new(source.clone(), request.proxy.as_deref())?;
+    let downloader = TileDownloader::new(source.clone(), request.proxy.as_deref())?
+        .with_tianditu_tokens(tianditu_tokens.clone());
     
     // 更新状态: 下载中
     task_log(app, tm, task_id, "INFO", "开始下载瓦片...");
@@ -1167,7 +1169,8 @@ async fn execute_zoom_level(
                 }
                 let ov_temp_dir = temp_dir.join(format!("__overlay_{}", idx));
                 std::fs::create_dir_all(&ov_temp_dir).map_err(|e| format!("创建叠加图层临时目录失败: {}", e))?;
-                let ov_dl = TileDownloader::new(ov_src.clone(), request.proxy.as_deref())?;
+                let ov_dl = TileDownloader::new(ov_src.clone(), request.proxy.as_deref())?
+                    .with_tianditu_tokens(tianditu_tokens.clone());
                 let ov_files = ov_dl.download_tiles(
                     main_tiles.clone(),
                     request.concurrency,
@@ -1709,6 +1712,17 @@ async fn execute_download_task(
 ) -> Result<(), String> {
     let event_name = format!("task-progress-{}", task_id);
     validate_offline_sources(&request, &source)?;
+    let app_tokens = app.clone();
+    let tm_tokens = tm.clone();
+    let tid_tokens = task_id.to_owned();
+    let token_sources = get_tile_sources(request.tianditu_token.clone());
+    let uses_tianditu = crate::tianditu_tokens::is_tianditu_url(&source.url)
+        || request.overlay_sources.as_ref().is_some_and(|ids| ids.iter().any(|id|
+            token_sources.get(id).is_some_and(|source| crate::tianditu_tokens::is_tianditu_url(&source.url))));
+    let tianditu_tokens = crate::tianditu_tokens::TiandituTokens::for_task(
+        request.tianditu_token.as_deref(), Arc::new(move |message| {
+            if uses_tianditu { task_log(&app_tokens, &tm_tokens, &tid_tokens, "INFO", message); }
+        }));
     let start_time = std::time::Instant::now();
     let z_min = request.zoom;
     let z_max = request.zoom_max.unwrap_or(z_min).max(z_min);
@@ -1852,6 +1866,7 @@ async fn execute_download_task(
             failed_offset,
             total_tiles,
             min_export_success_ratio,
+            &tianditu_tokens,
         ).await?;
 
         total_file_size = total_file_size.saturating_add(result.file_size);
@@ -2037,21 +2052,38 @@ pub async fn probe_tile(
     let headers = downloader.get_headers_public();
     let client = downloader.client();
 
-    let resp = client
-        .get(&url)
-        .headers(headers)
-        .send()
-        .await
-        .map_err(|e| format!("请求失败: {}", e))?;
+    // Preflight must also try backups, otherwise an exhausted primary can
+    // incorrectly trigger the user's "stop on empty probe" setting.
+    let token_pool = crate::tianditu_tokens::is_tianditu_url(&url).then(||
+        crate::tianditu_tokens::TiandituTokens::for_task(tianditu_token.as_deref(), Arc::new(|_| {})));
+    let (resp, probe_used_public_token) = loop {
+        let selected = token_pool.as_ref().map(|pool| pool.current()).transpose()?;
+        let used_public_token = selected.as_ref().is_some_and(|selected| selected.token == config::TIANDITU_DEFAULT_TOKEN);
+        let request_url = selected.as_ref().map(|selected| crate::tianditu_tokens::token_url(&url, &selected.token));
+        let resp = client.get(request_url.as_deref().unwrap_or(&url)).headers(headers.clone())
+            .send().await.map_err(|e| format!("请求失败: {}", e.without_url()))?;
+        if let (Some(pool), Some(selected)) = (&token_pool, selected.as_ref()) {
+            if matches!(resp.status().as_u16(), 401 | 403 | 429) {
+                let delay = if resp.status().as_u16() == 429 {
+                    crate::downloader::retry_after(resp.headers(), 0)
+                } else { std::time::Duration::ZERO };
+                if delay <= std::time::Duration::from_secs(60)
+                    && pool.reject(selected, &format!("HTTP {}", resp.status().as_u16())).is_ok() {
+                    drop(resp);
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+            }
+        }
+        break (resp, used_public_token);
+    };
 
     let status_code = resp.status().as_u16();
 
     if !resp.status().is_success() {
         let is_tianditu = source_key.starts_with("tianditu_")
             || url.contains("tianditu.gov.cn");
-        let uses_public_token = tianditu_token
-            .as_deref()
-            .map_or(true, |value| value.trim().is_empty());
+        let uses_public_token = probe_used_public_token;
         let token_kind = if uses_public_token {
             "当前使用 GeoD 内置的公开共享 Key，其额度和可用性不受保证"
         } else {
@@ -2063,7 +2095,7 @@ pub async fn probe_tile(
                 token_kind
             ),
             (true, 418) => format!(
-                "天地图 HTTP 418：缺少 Token 或 Token 无效。{}；请前往天地图控制台申请并在设置中填写自己的 Token",
+                "天地图 HTTP 418：请求被服务防护拦截或 Token 异常。{}；请检查 Token 和服务状态后重试",
                 token_kind
             ),
             (true, 403) => format!(
@@ -2191,6 +2223,12 @@ pub fn get_resumable_tasks(task_manager: State<'_, Arc<TaskManager>>) -> Vec<Per
         .collect()
 }
 
+fn refresh_task_tianditu_token(request: &mut DownloadRequest, settings: &AppSettings) {
+    request.tianditu_token = crate::tianditu_tokens::normalize_tokens(
+        settings.tianditu_token.as_deref(), &settings.tianditu_backup_tokens,
+    ).into_iter().next();
+}
+
 /// 恢复下载任务
 #[tauri::command]
 pub async fn resume_task(
@@ -2223,7 +2261,10 @@ pub async fn resume_task(
         .find(|t| t.task_id == task_id)
         .ok_or_else(|| "未找到可恢复的任务".to_string())?;
     
-    let request = persisted.request.clone();
+    let mut request = persisted.request.clone();
+    // A resumed task must use the latest saved credentials, including clears.
+    let current_settings = SettingsManager::new()?.get()?;
+    refresh_task_tianditu_token(&mut request, &current_settings);
     let task_name = persisted.task_name.clone();
     let source_name = persisted.source_name.clone();
     let tile_count = persisted.tile_count;
@@ -2457,7 +2498,10 @@ pub async fn export_partial_task(
         .find(|t| t.task_id == task_id)
         .ok_or_else(|| "未找到可恢复的任务".to_string())?;
 
-    let request = persisted.request.clone();
+    let mut request = persisted.request.clone();
+    // A resumed task must use the latest saved credentials, including clears.
+    let current_settings = SettingsManager::new()?.get()?;
+    refresh_task_tianditu_token(&mut request, &current_settings);
     let task_name = persisted.task_name.clone();
     let source_name = persisted.source_name.clone();
     let total_estimated = persisted.tile_count;
@@ -2994,7 +3038,13 @@ pub fn save_settings(mut settings: AppSettings) -> Result<(), String> {
         crate::assistant::set_api_key(api_key)?;
     }
     settings.deepseek_api_key = None;
+    settings.tianditu_token = settings.tianditu_token.as_deref()
+        .map(str::trim).filter(|value| !value.is_empty()).map(str::to_owned);
+    settings.tianditu_backup_tokens = crate::tianditu_tokens::normalize_tokens(
+        None, &settings.tianditu_backup_tokens,
+    ).into_iter().filter(|token| Some(token.as_str()) != settings.tianditu_token.as_deref()).collect();
     manager.save(&settings)?;
+    crate::tianditu_tokens::settings_saved(&settings);
     // 同步全局 TLS 严格性开关，避免用户变更后仍需重启才生效
     crate::config::set_allow_invalid_certs(settings.allow_invalid_certs);
     // 同步瓦片缓存配置
@@ -4510,6 +4560,26 @@ fn mime_to_format(mime: &str) -> &'static str {
 #[cfg(test)]
 mod memory_budget_tests {
     use super::*;
+
+    #[test]
+    fn resumed_task_replaces_stale_token_with_saved_primary_backup_or_clear() {
+        let mut request: DownloadRequest = serde_json::from_value(serde_json::json!({
+            "bounds": {"north": 40.0, "south": 39.0, "east": 117.0, "west": 116.0},
+            "zoom": 15, "source": "tianditu_img", "format": "tiles",
+            "tianditu_token": "stale-task-token",
+        })).unwrap();
+        let mut settings = AppSettings::default();
+        settings.tianditu_token = Some("saved-primary".into());
+        refresh_task_tianditu_token(&mut request, &settings);
+        assert_eq!(request.tianditu_token.as_deref(), Some("saved-primary"));
+        settings.tianditu_token = None;
+        settings.tianditu_backup_tokens = vec!["saved-backup".into()];
+        refresh_task_tianditu_token(&mut request, &settings);
+        assert_eq!(request.tianditu_token.as_deref(), Some("saved-backup"));
+        settings.tianditu_backup_tokens.clear();
+        refresh_task_tianditu_token(&mut request, &settings);
+        assert!(request.tianditu_token.is_none());
+    }
 
     #[test]
     fn reported_336660_raw_tiles_use_the_tile_working_set_estimate() {

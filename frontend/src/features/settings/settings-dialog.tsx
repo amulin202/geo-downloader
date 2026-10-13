@@ -31,6 +31,7 @@ import { getSettings, getSystemMemory, saveSettings } from './settings-api'
 import type { AppSettings } from '@/types/api'
 import { useTranslation } from 'react-i18next'
 import { WarningThresholdInput } from './warning-threshold-input'
+import { parseTiandituBackups } from './tianditu-tokens'
 import { warningThresholdSchema } from './warning-threshold-schema'
 
 const FORMAT_OPTIONS = [
@@ -42,6 +43,7 @@ const FORMAT_OPTIONS = [
 
 const settingsSchema = z.object({
   tianditu_token: z.string().trim(),
+  tianditu_backup_tokens: z.string().trim(),
   cesium_ion_token: z.string().trim(),
   proxy_enabled: z.boolean(),
   proxy_url: z.string().trim(),
@@ -58,6 +60,7 @@ type SettingsFormValues = z.infer<typeof settingsSchema>
 
 const DEFAULT_VALUES: SettingsFormValues = {
   tianditu_token: '',
+  tianditu_backup_tokens: '',
   cesium_ion_token: '',
   proxy_enabled: false,
   proxy_url: '',
@@ -78,6 +81,7 @@ function fromAppSettings(s: AppSettings | undefined): SettingsFormValues {
     : 'geotiff'
   return {
     tianditu_token: s.tianditu_token ?? '',
+    tianditu_backup_tokens: (s.tianditu_backup_tokens ?? []).join('\n'),
     cesium_ion_token: s.cesium_ion_token ?? '',
     proxy_enabled: s.proxy_enabled ?? false,
     proxy_url: s.proxy_url ?? '',
@@ -95,6 +99,7 @@ function toAppSettings(values: SettingsFormValues, base: AppSettings | undefined
   return {
     ...(base ?? {}),
     tianditu_token: values.tianditu_token.trim() || null,
+    tianditu_backup_tokens: parseTiandituBackups(values.tianditu_backup_tokens, values.tianditu_token),
     cesium_ion_token: values.cesium_ion_token.trim() || null,
     proxy_enabled: values.proxy_enabled,
     proxy_url: values.proxy_url.trim(),
@@ -209,6 +214,14 @@ export function SettingsDialog() {
                   autoComplete="off"
                   {...register('tianditu_token')}
                 />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="tianditu_backup_tokens">{t('settings.fields.tiandituBackups')}</Label>
+                <textarea id="tianditu_backup_tokens" rows={3} autoComplete="off" spellCheck={false}
+                  className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
+                  placeholder={t('settings.fields.tiandituBackupsPlaceholder')}
+                  {...register('tianditu_backup_tokens')} />
+                <p className="text-xs text-muted-foreground">{t('settings.fields.tiandituBackupsHint')}</p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="cesium_ion_token">Cesium Ion Token</Label>

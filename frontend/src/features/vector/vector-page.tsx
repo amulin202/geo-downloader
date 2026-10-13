@@ -1,3 +1,4 @@
+import { primaryTiandituToken } from '@/features/settings/tianditu-tokens'
 import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
@@ -21,7 +22,7 @@ export function VectorPage() {
     queryFn: getSettings,
     enabled: inTauri,
   })
-  const tiandituToken = settingsQuery.data?.tianditu_token ?? null
+  const tiandituToken = primaryTiandituToken(settingsQuery.data)
   const sourcesQuery = useQuery({
     queryKey: ['tile-sources-merged', tiandituToken],
     queryFn: () => getTileSourcesMerged(tiandituToken),

@@ -1,3 +1,4 @@
+import { primaryTiandituToken } from '@/features/settings/tianditu-tokens'
 import { useEffect, useMemo, useState } from 'react'
 import { Controller, useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -309,7 +310,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
   const isDemMode = mode === 'dem'
   const isMvtMode = mode === 'mvt'
   const settingsQuery = useQuery({ queryKey: ['settings'], queryFn: getSettings })
-  const tiandituToken = settingsQuery.data?.tianditu_token ?? null
+  const tiandituToken = primaryTiandituToken(settingsQuery.data)
   const sourcesQuery = useQuery({
     queryKey: ['tile-sources-merged', tiandituToken],
     queryFn: () => getTileSourcesMerged(tiandituToken),
@@ -500,7 +501,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
           probeZoom,
           centerLat,
           centerLng,
-          settingsQuery.data?.tianditu_token ?? null,
+          primaryTiandituToken(settingsQuery.data),
           settingsQuery.data?.proxy_enabled && settingsQuery.data.proxy_url
             ? settingsQuery.data.proxy_url
             : null,
@@ -568,7 +569,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
         format: values.format,
         save_path: appendTimestamp(resolvedSavePath, values.format),
         concurrency: values.concurrency,
-        tianditu_token: settingsQuery.data?.tianditu_token ?? null,
+        tianditu_token: primaryTiandituToken(settingsQuery.data),
         proxy:
           settingsQuery.data?.proxy_enabled && settingsQuery.data.proxy_url
             ? settingsQuery.data.proxy_url
@@ -834,7 +835,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
           </p>
         )}
 
-        {source.startsWith('tianditu_') && !settingsQuery.data?.tianditu_token?.trim() && (
+        {source.startsWith('tianditu_') && !tiandituToken && (
           <div className="flex gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs leading-5 text-amber-800 dark:text-amber-300">
             <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
             <span>

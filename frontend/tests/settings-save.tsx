@@ -16,16 +16,24 @@ let stored: AppSettings = {
   tile_count_warning: 500000, ai_assistant_enabled: false,
   ai_model: params.get('invalid') === 'ai_model' ? '' : 'deepseek-v4-flash',
 }
+const storageKey = 'geod-qa-tianditu-backup-settings'
+if (params.get('persist') === '1') {
+  const previous = sessionStorage.getItem(storageKey)
+  if (previous) stored = JSON.parse(previous) as AppSettings
+}
 let saves = 0
 Object.assign(window, { __TAURI_INTERNALS__: {
   invoke: async (command: string, args?: Record<string, unknown>) => {
     switch (command) {
-      case 'get_settings': return structuredClone(params.get('mismatch') === '1' && saves > 0 ? {...stored,tianditu_token:null} : stored)
+      case 'get_settings': return structuredClone(saves > 0 && params.get('mismatch') === '1'
+        ? {...stored,tianditu_token:null}
+        : saves > 0 && params.get('mismatch') === 'backups' ? {...stored,tianditu_backup_tokens:[]} : stored)
       case 'save_settings':
         if (params.get('fail') === '1') throw new Error('测试：保存目录不可写')
         stored = structuredClone(args?.settings as AppSettings)
+        if (params.get('persist') === '1') sessionStorage.setItem(storageKey, JSON.stringify(stored))
         saves++
-        document.getElementById('qa-receipt')!.textContent = `saves=${saves}; tokenSaved=${Boolean(stored.tianditu_token)}`
+        document.getElementById('qa-receipt')!.textContent = `saves=${saves}; tokenSaved=${Boolean(stored.tianditu_token)}; backups=${stored.tianditu_backup_tokens?.length ?? 0}`
         return null
       case 'assistant_secret_status': return {configured:false}
       case 'get_system_memory': return {total_mb:98302,available_mb:92656}
@@ -43,6 +51,7 @@ const { SettingsPanel } = await import('../src/features/settings/settings-panel'
 const root = createRoot(document.getElementById('root')!)
 root.render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false,refetchOnWindowFocus:false}}})}>
   <main style={{height:'100vh',width:380,maxWidth:'100%',overflowY:'auto',padding:12}}>
+    <p className="mb-3 text-xs text-muted-foreground">设置测试 · 使用隔离存储，不修改真实配置</p>
     <SettingsPanel />
     <output id="qa-receipt" className="block break-all">saves=0</output>
   </main>

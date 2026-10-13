@@ -1,3 +1,4 @@
+import { primaryTiandituToken } from '@/features/settings/tianditu-tokens'
 import { useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
@@ -146,7 +147,7 @@ export function BatchDialog() {
     const settings = await loadCurrentSettings().catch(() => null)
     const proxy =
       settings?.proxy_enabled && settings.proxy_url ? settings.proxy_url : null
-    const tiandituToken = settings?.tianditu_token ?? null
+    const tiandituToken = primaryTiandituToken(settings)
 
     const indices = Array.from(selected).sort((a, b) => a - b)
     const ext =

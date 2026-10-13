@@ -330,6 +330,18 @@ body {
   letter-spacing: 0;
   white-space: nowrap;
   transform: translate(-50%, calc(-100% - 8px));
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.geod-measure-label-host.leaflet-drag-target .geod-measure-label {
+  cursor: grabbing;
+}
+.geod-measure-label-host.is-selected .geod-measure-label,
+.geod-measure-label-host:focus-visible .geod-measure-label {
+  border-color: #2563eb;
+  outline: 1px solid #2563eb;
 }
 .geod-measure-label strong {
   font-weight: 650;
